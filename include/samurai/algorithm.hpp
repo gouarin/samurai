@@ -37,6 +37,7 @@ namespace samurai
     inline void for_each_interval(LevelCellArray<dim, TInterval>& lca, Func&& f)
     {
         #pragma omp parallel
+        #pragma omp single
         for(auto it = lca.begin(); it != lca.end(); ++it)
         {
             #pragma omp task
