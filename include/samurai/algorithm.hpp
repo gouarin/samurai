@@ -36,6 +36,7 @@ namespace samurai
     template <std::size_t dim, class TInterval, class Func>
     inline void for_each_interval(LevelCellArray<dim, TInterval>& lca, Func&& f)
     {
+        #pragma omp parallel for
         for(auto it = lca.begin(); it != lca.end(); ++it)
         {
             f(lca.level(), *it, it.index());
