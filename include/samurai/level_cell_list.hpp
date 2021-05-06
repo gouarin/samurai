@@ -75,6 +75,7 @@ namespace samurai
 
         const list_interval_t& operator[](const index_yz_t& index) const;
         list_interval_t& operator[](const index_yz_t& index);
+        const list_interval_t& get(const index_yz_t& index) const;
 
         const grid_t& grid_yz() const;
 
@@ -113,6 +114,12 @@ namespace samurai
     /// Mutable access to the interval list at given dim-1 coordinates
     template<std::size_t Dim, class TInterval>
     inline auto LevelCellList<Dim, TInterval>::operator[](const index_yz_t& index) -> list_interval_t&
+    {
+        return detail::access_grid_yz(m_grid_yz, index, std::integral_constant<std::size_t, dim - 1>{});
+    }
+
+    template<std::size_t Dim, class TInterval>
+    inline auto LevelCellList<Dim, TInterval>::get(const index_yz_t& index) const -> const list_interval_t&
     {
         return detail::access_grid_yz(m_grid_yz, index, std::integral_constant<std::size_t, dim - 1>{});
     }

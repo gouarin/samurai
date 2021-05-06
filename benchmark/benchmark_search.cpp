@@ -2,6 +2,8 @@
 #include <experimental/random>
 #include <benchmark/benchmark.h>
 
+#include <fmt/format.h>
+
 #include <xtensor/xfixed.hpp>
 #include <xtensor/xrandom.hpp>
 
@@ -64,36 +66,60 @@ class MyFixture : public ::benchmark::Fixture
 
     void bench(benchmark::State& state)
     {
-        std::size_t found = 0;
-        for (auto _ : state)
+        if (state.range(0) != 0)
         {
-            for(std::size_t s = 0; s < state.range(0); ++s)
+            std::size_t found = 0;
+            for (auto _ : state)
             {
-                auto level = std::experimental::randint(min_level, max_level);
-                std::array<int, dim> coord;
-                for(auto& c: coord)
+                for(std::size_t s = 0; s < state.range(0); ++s)
                 {
-                    c = std::experimental::randint(-bound<<level, (bound<<level) - 1);
-                }
-                auto out = samurai::find(mesh[level], coord);
-                if  (out != -1)
-                {
-                    found++;
+                    auto level = std::experimental::randint(min_level, max_level);
+                    std::array<int, dim> coord;
+                    for(auto& c: coord)
+                    {
+                        c = std::experimental::randint(-bound<<level, (bound<<level) - 1);
+                    }
+                    auto out = samurai::find(mesh[level], coord);
+                    if  (out != -1)
+                    {
+                        found++;
+                    }
                 }
             }
+
+            for(std::size_t d=1; d<dim; ++d)
+            {
+                std::size_t min_size = std::numeric_limits<std::size_t>::max();
+                std::size_t max_size = std::numeric_limits<std::size_t>::min();
+                for (std::size_t level = min_level; level <= max_level; ++level)
+                {
+                    if (!mesh[level].empty())
+                    {
+                        auto offsets = mesh[level].offsets(d);
+                        std::adjacent_difference(offsets.begin(), offsets.end(), offsets.begin());
+                        auto minmax = std::minmax_element(offsets.cbegin()+1, offsets.cend());
+
+                        min_size = std::min(min_size, *minmax.first);
+                        max_size = std::max(max_size, *minmax.second);
+                    }
+                }
+                state.counters[fmt::format("min[{}]", d)] = min_size;
+                state.counters[fmt::format("max[{}]", d)] = max_size;
+            }
+
+            state.counters["nb cells"] = mesh.nb_cells();
+            state.counters["percent found"] = static_cast<double>(found)/state.iterations()/state.range(0);
         }
-        state.counters["nb cells"] = mesh.nb_cells();
-        state.counters["found"] = static_cast<double>(found)/state.iterations();
     }
 
     samurai::CellArray<dim_> mesh;
 };
 
 BENCHMARK_TEMPLATE_DEFINE_F(MyFixture, Search_1D, 1, 1000)(benchmark::State& state){bench(state);}
-BENCHMARK_REGISTER_F(MyFixture, Search_1D)->DenseRange(1, 10, 1);
+BENCHMARK_REGISTER_F(MyFixture, Search_1D)->DenseRange(1, 9, 1)->DenseRange(10, 100, 10);
 
 BENCHMARK_TEMPLATE_DEFINE_F(MyFixture, Search_2D, 2, 10)(benchmark::State& state){bench(state);}
-BENCHMARK_REGISTER_F(MyFixture, Search_2D)->DenseRange(1, 10, 1);
+BENCHMARK_REGISTER_F(MyFixture, Search_2D)->DenseRange(1, 9, 1)->DenseRange(10, 100, 10);
 
 BENCHMARK_TEMPLATE_DEFINE_F(MyFixture, Search_3D, 3, 1)(benchmark::State& state){bench(state);}
-BENCHMARK_REGISTER_F(MyFixture, Search_3D)->DenseRange(1, 10, 1);
+BENCHMARK_REGISTER_F(MyFixture, Search_3D)->DenseRange(1, 9, 1)->DenseRange(10, 100, 10);

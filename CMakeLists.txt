@@ -38,7 +38,7 @@ target_include_directories(
     INTERFACE $<BUILD_INTERFACE:${SAMURAI_INCLUDE_DIRS}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
-target_link_libraries(samurai INTERFACE xtensor pugixml spdlog hdf5 fmt::fmt)
+target_link_libraries(samurai INTERFACE xtensor pugixml spdlog hdf5 fmt)
 
 OPTION(BUILD_BENCHMARKS "samurai benchmark suite" OFF)
 OPTION(BUILD_TESTS "samurai test suite" OFF)

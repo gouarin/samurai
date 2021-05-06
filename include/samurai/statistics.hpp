@@ -55,7 +55,7 @@ namespace samurai
                 for(std::size_t d=1; d<dim; ++d)
                 {
                     auto dim_str = fmt::format("axis-{}", d);
-                    auto offsets = ca[l].offsets(1);
+                    auto offsets = ca[l].offsets(d);
                     std::adjacent_difference(offsets.begin(), offsets.end(), offsets.begin());
                     auto minmax = std::minmax_element(offsets.cbegin()+1, offsets.cend());
 

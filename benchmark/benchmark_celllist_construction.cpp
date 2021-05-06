@@ -4,6 +4,28 @@
 #include <samurai/cell_list.hpp>
 #include <samurai/cell_array.hpp>
 
+static void BM_CellListConstruction_1D(benchmark::State& state)
+{
+    constexpr std::size_t dim = 1;
+
+    std::size_t min_level = 1;
+    std::size_t max_level = 12;
+
+    samurai::CellList<dim> cl;
+
+    for (auto _ : state)
+    {
+      for(std::size_t s = 0; s < state.range(0); ++s)
+      {
+          auto level = std::experimental::randint(min_level, max_level);
+          auto x = std::experimental::randint(0, (100<<level) - 1);
+
+          cl[level][{}].add_point(x);
+      }
+    }
+}
+BENCHMARK(BM_CellListConstruction_1D)->Range(8, 8<<18);
+
 static void BM_CellListConstruction_2D(benchmark::State& state)
 {
     constexpr std::size_t dim = 2;
@@ -50,6 +72,31 @@ static void BM_CellListConstruction_3D(benchmark::State& state)
     }
 }
 BENCHMARK(BM_CellListConstruction_3D)->Range(8, 8<<18);
+
+static void BM_CellList2CellArray_1D(benchmark::State& state)
+{
+    constexpr std::size_t dim = 1;
+
+    std::size_t min_level = 1;
+    std::size_t max_level = 12;
+
+    samurai::CellList<dim> cl;
+    samurai::CellArray<dim> ca;
+
+    for(std::size_t s = 0; s < state.range(0); ++s)
+    {
+        auto level = std::experimental::randint(min_level, max_level);
+        auto x = std::experimental::randint(0, (100<<level) - 1);
+
+        cl[level][{}].add_point(x);
+    }
+
+    for (auto _ : state)
+    {
+      ca = {cl};
+    }
+}
+BENCHMARK(BM_CellList2CellArray_1D)->Range(8, 8<<18);
 
 static void BM_CellList2CellArray_2D(benchmark::State& state)
 {
