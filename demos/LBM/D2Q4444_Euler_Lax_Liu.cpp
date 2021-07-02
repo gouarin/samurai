@@ -291,6 +291,34 @@ void one_time_step(Field &f,Func&& update_bc_for_level, const pred& pred_coeff,
                 }
             });
         }
+        // else // Advection at the coarse levels using the overleaves
+        // {
+        //     std::size_t j = max_level - level;
+        //     double coeff = 1. / (1 << (2*j)); // ATTENTION A LA DIMENSION 2 !!!!
+
+
+        //     leaves([&](auto& interval, auto& index) { // This are overleaves
+        //         auto k = interval; // Logical index in x
+        //         auto h = index[0]; // Logical index in y
+
+        //         for (int scheme_n = 0; scheme_n < 4; ++scheme_n)    {
+
+        //             auto shift = 4 * scheme_n;
+
+        //             for (std::size_t alpha = 0; alpha < 4; ++alpha)
+        //             {
+        //                 advected(alpha + shift, level, k, h) = f(alpha + shift, level, k, h);
+        //                 for(auto &c: pred_coeff[j][alpha].coeff)
+        //                 {
+        //                     coord_index_t stencil_x, stencil_y;
+        //                     std::tie(stencil_x, stencil_y) = c.first;
+
+        //                     advected(alpha + shift, level, k, h) +=  coeff * c.second * f(alpha + shift, level, k + stencil_x, h + stencil_y);
+        //                 }
+        //             }
+        //         }
+        //     });
+        // }
         else // Advection at the coarse levels using the overleaves
         {
             auto lev_p_1 = level + 1;
@@ -730,11 +758,11 @@ int main(int argc, char *argv[])
                                                                {"info", spdlog::level::info}};
             constexpr size_t dim = 2;
             // with overleaves
-            // using Config = samurai::MROConfig<dim, 2>;
-            // using Mesh = samurai::MROMesh<Config>;
+            using Config = samurai::MROConfig<dim, 2>;
+            using Mesh = samurai::MROMesh<Config>;
             // without overleaves
-            using Config = samurai::MRConfig<dim, 2>;
-            using Mesh = samurai::MRMesh<Config>;
+            // using Config = samurai::MRConfig<dim, 2>;
+            // using Mesh = samurai::MRMesh<Config>;
 
             spdlog::set_level(log_level[result["log"].as<std::string>()]);
             std::size_t min_level = result["min_level"].as<std::size_t>();
