@@ -14,6 +14,7 @@
 #include <samurai/mr/criteria.hpp>
 #include <samurai/mr/harten.hpp>
 #include <samurai/mr/mesh.hpp>
+#include <samurai/mr/mesh_overleaves.hpp>
 #include <samurai/mr/refinement.hpp>
 #include <samurai/hdf5.hpp>
 #include <samurai/statistics.hpp>
@@ -41,11 +42,11 @@ double toc()
 
 double gm = 1.4; // Gas constant
 
-template<class Config>
-auto init_f(samurai::MRMesh<Config> &mesh, int config, double lambda)
+template<class Mesh>
+auto init_f(Mesh& mesh, int config, double lambda)
 {
     constexpr std::size_t nvel = 16;
-    using mesh_id_t = typename samurai::MRMesh<Config>::mesh_id_t;
+    using mesh_id_t = typename Mesh::mesh_id_t;
 
     auto f = samurai::make_field<double, nvel>("f", mesh);
     f.fill(0);
@@ -261,8 +262,7 @@ void one_time_step(Field &f,Func&& update_bc_for_level, const pred& pred_coeff,
     auto min_level = mesh.min_level();
     auto max_level = mesh.max_level();
 
-    samurai::update_ghost_mr(f, std::forward<Func>(update_bc_for_level));
-    samurai::update_overleaves_mr(f, std::forward<Func>(update_bc_for_level));
+    samurai::update_ghost(f, std::forward<Func>(update_bc_for_level));
 
     Field new_f{"new_f", mesh};
     new_f.array().fill(0.);
@@ -541,7 +541,7 @@ double compute_error(Field & f, FieldFull & f_full, Func&& update_bc_for_level)
 
     auto init_mesh = f_full.mesh();
 
-    samurai::update_ghost_mr(f, std::forward<Func>(update_bc_for_level));
+    samurai::update_ghost(f, std::forward<Func>(update_bc_for_level));
 
     auto f_reconstructed = samurai::make_field<value_t, size>("f_reconstructed", init_mesh);
     f_reconstructed.fill(0.);
@@ -599,7 +599,7 @@ void save_reconstructed(Field & f, FieldFull & f_full, Func&& update_bc_for_leve
 
     auto init_mesh = f_full.mesh();
 
-    samurai::update_ghost_mr(f, std::forward<Func>(update_bc_for_level));
+    samurai::update_ghost(f, std::forward<Func>(update_bc_for_level));
 
     auto f_reconstructed = samurai::make_field<value_t, size>("f_reconstructed", init_mesh); // To reconstruct all and see entropy
     f_reconstructed.fill(0.);
@@ -729,7 +729,12 @@ int main(int argc, char *argv[])
                                                                {"warning", spdlog::level::warn},
                                                                {"info", spdlog::level::info}};
             constexpr size_t dim = 2;
+            // with overleaves
+            // using Config = samurai::MROConfig<dim, 2>;
+            // using Mesh = samurai::MROMesh<Config>;
+            // without overleaves
             using Config = samurai::MRConfig<dim, 2>;
+            using Mesh = samurai::MRMesh<Config>;
 
             spdlog::set_level(log_level[result["log"].as<std::string>()]);
             std::size_t min_level = result["min_level"].as<std::size_t>();
@@ -775,11 +780,11 @@ int main(int argc, char *argv[])
             // }
 
             samurai::Box<double, dim> box({0, 0}, {1, 1});
-            samurai::MRMesh<Config> mesh(box, min_level, max_level);
-            using mesh_id_t = typename samurai::MRMesh<Config>::mesh_id_t;
-            samurai::MRMesh<Config> mesh_ref{box, max_level, max_level};
+            Mesh mesh(box, min_level, max_level);
+            using mesh_id_t = typename Mesh::mesh_id_t;
+            Mesh mesh_ref{box, max_level, max_level};
 
-            using coord_index_t = typename samurai::MRMesh<Config>::coord_index_t;
+            using coord_index_t = typename Mesh::coord_index_t;
             auto pred_coeff = compute_prediction<coord_index_t>(min_level, max_level);
 
             // Initialization

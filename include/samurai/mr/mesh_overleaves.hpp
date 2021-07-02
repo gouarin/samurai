@@ -15,14 +15,15 @@
 
 namespace samurai
 {
-    enum class MRMeshId
+    enum class MROMeshId
     {
         cells = 0,
         cells_and_ghosts = 1,
         proj_cells = 2,
         union_cells = 3,
         all_cells = 4,
-        count = 5,
+        overleaves = 5, // Added in order to automatically handle flux correction. (by Thomas)
+        count = 6,
         reference = all_cells
     };
 
@@ -31,7 +32,7 @@ namespace samurai
               std::size_t graduation_width_ = 1,
               std::size_t max_refinement_level_ = 20,
               class TInterval = Interval<int>>
-    struct MRConfig
+    struct MROConfig
     {
         static constexpr std::size_t dim = dim_;
         static constexpr std::size_t max_refinement_level = max_refinement_level_;
@@ -43,14 +44,14 @@ namespace samurai
                                                              static_cast<int>(max_stencil_width)),
                                                             static_cast<int>(default_s_for_prediction));
         using interval_t = TInterval;
-        using mesh_id_t = MRMeshId;
+        using mesh_id_t = MROMeshId;
     };
 
     template <class Config>
-    class MRMesh: public samurai::Mesh_base<MRMesh<Config>, Config>
+    class MROMesh: public samurai::Mesh_base<MROMesh<Config>, Config>
     {
     public:
-        using base_type = samurai::Mesh_base<MRMesh<Config>, Config>;
+        using base_type = samurai::Mesh_base<MROMesh<Config>, Config>;
 
         using config = typename base_type::config;
         static constexpr std::size_t dim = config::dim;
@@ -63,14 +64,14 @@ namespace samurai
         using ca_type = typename base_type::ca_type;
         using lca_type = typename base_type::lca_type;
 
-        MRMesh(const MRMesh&) = default;
-        MRMesh& operator=(const MRMesh&) = default;
+        MROMesh(const MROMesh&) = default;
+        MROMesh& operator=(const MROMesh&) = default;
 
-        MRMesh(MRMesh&&) = default;
-        MRMesh& operator=(MRMesh&&) = default;
+        MROMesh(MROMesh&&) = default;
+        MROMesh& operator=(MROMesh&&) = default;
 
-        MRMesh(const cl_type &cl, std::size_t min_level, std::size_t max_level);
-        MRMesh(const samurai::Box<double, dim>& b, std::size_t min_level, std::size_t max_level);
+        MROMesh(const cl_type &cl, std::size_t min_level, std::size_t max_level);
+        MROMesh(const samurai::Box<double, dim>& b, std::size_t min_level, std::size_t max_level);
 
         void update_sub_mesh_impl();
 
@@ -80,17 +81,17 @@ namespace samurai
     };
 
     template <class Config>
-    inline MRMesh<Config>::MRMesh(const cl_type &cl, std::size_t min_level, std::size_t max_level)
+    inline MROMesh<Config>::MROMesh(const cl_type &cl, std::size_t min_level, std::size_t max_level)
     : base_type(cl, min_level, max_level)
     {}
 
     template <class Config>
-    inline MRMesh<Config>::MRMesh(const samurai::Box<double, dim>& b, std::size_t min_level, std::size_t max_level)
+    inline MROMesh<Config>::MROMesh(const samurai::Box<double, dim>& b, std::size_t min_level, std::size_t max_level)
     : base_type(b, max_level, min_level, max_level)
     {}
 
     template <class Config>
-    inline void MRMesh<Config>::update_sub_mesh_impl()
+    inline void MROMesh<Config>::update_sub_mesh_impl()
     {
         auto max_level = this->m_cells[mesh_id_t::cells].max_level();
         auto min_level = this->m_cells[mesh_id_t::cells].min_level();
@@ -190,12 +191,42 @@ namespace samurai
             this->m_cells[mesh_id_t::proj_cells][level - 1] = {lcl};
         }
 
+        // Construct overleaves
+        cl_type overleaves_list;
+
+        const int cells_to_add = 1; // To be changed according to the numerical scheme
+
+        for_each_interval(this->m_cells[mesh_id_t::cells], [&](std::size_t level, const auto& interval, const auto& index_yz)
+        {
+            if (level < this->max_level())
+            {
+                lcl_type& lol = overleaves_list[level + 1]; // We have to put it at the higher level
+                lcl_type& lcl = cell_list[level + 1]; // We have to put it at the higher level
+
+                static_nested_loop<dim - 1, -cells_to_add, cells_to_add + 1, 1>([&](auto stencil)
+                {
+                    auto index = xt::eval(index_yz + stencil);
+
+                    lol[2 * index].add_interval({2 * (interval.start - cells_to_add),
+                                                                2 * (interval.end   + cells_to_add)});
+                    lol[2 * index + 1].add_interval({2 * (interval.start - cells_to_add),
+                                                                    2 * (interval.end   + cells_to_add)});
+
+                    lcl[2 * index].add_interval({2 * (interval.start - cells_to_add),
+                                                            2 * (interval.end   + cells_to_add)});
+                    lcl[2 * index + 1].add_interval({2 * (interval.start - cells_to_add),
+                                                                2 * (interval.end   + cells_to_add)});
+                });
+            }
+        });
+        this->m_cells[mesh_id_t::overleaves] = {overleaves_list, false};
+
         this->m_cells[mesh_id_t::all_cells] = {cell_list}; // We must put the overleaves in the all cells to store them
     }
 
     template <class Config>
     template<typename... T>
-    inline xt::xtensor<bool, 1> MRMesh<Config>::exists(mesh_id_t type, std::size_t level, interval_t interval, T... index) const
+    inline xt::xtensor<bool, 1> MROMesh<Config>::exists(mesh_id_t type, std::size_t level, interval_t interval, T... index) const
     {
         using coord_index_t = typename interval_t::coord_index_t;
         const auto& lca = this->m_cells[type][level];
@@ -219,19 +250,20 @@ namespace samurai
 } // namespace samurai
 
 template <>
-struct fmt::formatter<samurai::MRMeshId>: formatter<string_view>
+struct fmt::formatter<samurai::MROMeshId>: formatter<string_view>
 {
     // parse is inherited from formatter<string_view>.
     template <typename FormatContext>
-    auto format(samurai::MRMeshId c, FormatContext& ctx) {
+    auto format(samurai::MROMeshId c, FormatContext& ctx) {
         string_view name = "unknown";
         switch (c) {
-        case samurai::MRMeshId::cells:            name = "cells"; break;
-        case samurai::MRMeshId::cells_and_ghosts: name = "cells and ghosts"; break;
-        case samurai::MRMeshId::proj_cells:       name = "projection cells"; break;
-        case samurai::MRMeshId::union_cells:      name = "union cells"; break;
-        case samurai::MRMeshId::all_cells:        name = "all cells"; break;
-        case samurai::MRMeshId::count:            name = "count"; break;
+        case samurai::MROMeshId::cells:            name = "cells"; break;
+        case samurai::MROMeshId::cells_and_ghosts: name = "cells and ghosts"; break;
+        case samurai::MROMeshId::proj_cells:       name = "projection cells"; break;
+        case samurai::MROMeshId::union_cells:      name = "union cells"; break;
+        case samurai::MROMeshId::overleaves:       name = "overleaves"; break;
+        case samurai::MROMeshId::all_cells:        name = "all cells"; break;
+        case samurai::MROMeshId::count:            name = "count"; break;
         }
         return formatter<string_view>::format(name, ctx);
     }

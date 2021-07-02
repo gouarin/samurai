@@ -10,14 +10,18 @@
 #include "../numeric/projection.hpp"
 #include "../numeric/prediction.hpp"
 
+#include "../amr/mesh.hpp"
+#include "../mr/mesh.hpp"
+#include "../mr/mesh_overleaves.hpp"
+
+
 namespace samurai
 {
-    template<class Field, class Func>
-    void update_ghost(Field& field, Func&& update_bc_for_level)
+    template<class Config, class Field, class Func>
+    void update_ghost(const amr::Mesh<Config>& mesh, Field& field, Func&& update_bc_for_level)
     {
-        using mesh_id_t = typename Field::mesh_t::mesh_id_t;
+        using mesh_id_t = typename amr::Mesh<Config>::mesh_id_t;
 
-        auto mesh = field.mesh();
         std::size_t min_level = mesh.min_level();
         std::size_t max_level = mesh.max_level();
 
@@ -39,12 +43,42 @@ namespace samurai
         }
     }
 
-    template<class Field, class Func>
-    void update_ghost_mr(Field& field, Func&& update_bc_for_level)
+    template<class Config, class Field, class Func>
+    void update_ghost(const MRMesh<Config>& mesh, Field& field, Func&& update_bc_for_level)
     {
-        using mesh_id_t = typename Field::mesh_t::mesh_id_t;
+        using mesh_id_t = typename MRMesh<Config>::mesh_id_t;
 
-        auto mesh = field.mesh();
+        std::size_t min_level = mesh.min_level();
+        std::size_t max_level = mesh.max_level();
+
+        for (std::size_t level = max_level; level >= 1; --level)
+            {
+            auto set_at_levelm1 = intersection(mesh[mesh_id_t::reference][level],
+                                               mesh[mesh_id_t::proj_cells][level-1])
+                                 .on(level - 1);
+            set_at_levelm1.apply_op(projection(field));
+        }
+
+        for (std::size_t level = min_level; level <= max_level; ++level)
+        {
+            // We eliminate the overleaves from the computation since they
+            // are done separately
+            auto expr = intersection(difference(mesh[mesh_id_t::all_cells][level],
+                                                           union_(mesh[mesh_id_t::cells][level],
+                                                                  mesh[mesh_id_t::proj_cells][level])),
+                                                mesh.domain())
+                        .on(level);
+
+            expr.apply_op(prediction<1, false>(field));
+            update_bc_for_level(field, level);
+        }
+    }
+
+    template<class Config, class Field, class Func>
+    void update_ghost(const MROMesh<Config>& mesh, Field& field, Func&& update_bc_for_level)
+    {
+        using mesh_id_t = typename MROMesh<Config>::mesh_id_t;
+
         std::size_t min_level = mesh.min_level();
         std::size_t max_level = mesh.max_level();
 
@@ -61,27 +95,17 @@ namespace samurai
             // We eliminate the overleaves from the computation since they
             // are done separately
             auto expr = difference(intersection(difference(mesh[mesh_id_t::all_cells][level],
-                                                           union_(mesh[mesh_id_t::cells][level],
-                                                                  mesh[mesh_id_t::proj_cells][level])),
+                                                            union_(mesh[mesh_id_t::cells][level],
+                                                                   mesh[mesh_id_t::proj_cells][level])),
                                                 mesh.domain()),
-                                   difference(mesh[mesh_id_t::overleaves][level],
-                                              union_(mesh[mesh_id_t::union_cells][level],
-                                                     mesh[mesh_id_t::cells_and_ghosts][level])))
-                        .on(level);
+                                    difference(mesh[mesh_id_t::overleaves][level],
+                                               union_(mesh[mesh_id_t::union_cells][level],
+                                                      mesh[mesh_id_t::cells_and_ghosts][level])))
+                      .on(level);
 
             expr.apply_op(prediction<1, false>(field));
             update_bc_for_level(field, level);
         }
-    }
-
-    template<class Field, class Func>
-    void update_overleaves_mr(Field& field, Func&& update_bc_for_level)
-    {
-        using mesh_id_t = typename Field::mesh_t::mesh_id_t;
-
-        auto mesh = field.mesh();
-        std::size_t min_level = mesh.min_level();
-        std::size_t max_level = mesh.max_level();
 
         for (std::size_t level = min_level + 1; level <= max_level; ++level)
         {
@@ -97,19 +121,25 @@ namespace samurai
         }
     }
 
+    template<class Field, class Func>
+    void update_ghost(Field& field, Func&& update_bc_for_level)
+    {
+        update_ghost(field.mesh(), field, std::forward<Func>(update_bc_for_level));
+    }
+
     template<class Field, class Tag>
     bool update_field(Field& field, const Tag& tag)
     {
         constexpr std::size_t dim = Field::dim;
         using mesh_t = typename Field::mesh_t;
-        using mesh_id_t = typename Field::mesh_t::mesh_id_t;
+        using mesh_id_t = typename mesh_t::mesh_id_t;
         using interval_t = typename mesh_t::interval_t;
         using coord_index_t = typename interval_t::coord_index_t;
-        using cl_type = typename Field::mesh_t::cl_type;
-
-        auto mesh = field.mesh();
+        using cl_type = typename mesh_t::cl_type;
 
         cl_type cl;
+
+        auto mesh = field.mesh();
 
         for_each_interval(mesh[mesh_id_t::cells], [&](std::size_t level, const auto& interval, const auto& index)
         {
@@ -174,7 +204,7 @@ namespace samurai
     }
 
     template<class Field, class Tag>
-    bool update_field_mr(Field& field, Field& old_field, const Tag& tag)
+    bool update_field(Field& field, Field& old_field, const Tag& tag)
     {
         constexpr std::size_t dim = Field::dim;
         using mesh_t = typename Field::mesh_t;

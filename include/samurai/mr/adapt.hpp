@@ -123,9 +123,9 @@ namespace samurai
             m_tag[cell] = static_cast<int>(CellFlag::keep);
         });
 
-        update_ghost_mr(m_field, m_update_bc_for_level);
+        update_ghost(m_field, m_update_bc_for_level);
 
-        for (std::size_t level =  ((min_level > 0)? min_level - 1: 0); level < max_level - ite; ++level)
+        for (std::size_t level = ((min_level > 0)? min_level - 1: 0); level < max_level - ite; ++level)
         {
             auto subset = intersection(mesh[mesh_id_t::all_cells][level],
                                        mesh[mesh_id_t::cells][level + 1])
@@ -218,7 +218,7 @@ namespace samurai
             keep_subset.apply_op(maximum(m_tag));
         }
 
-        if (update_field_mr(m_field, field_old, m_tag))
+        if (update_field(m_field, field_old, m_tag))
         {
             return true;
         }

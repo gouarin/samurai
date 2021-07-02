@@ -45,13 +45,10 @@ namespace samurai
         {
             // We eliminate the overleaves from the computation since they
             // are done separately
-            auto expr = difference(intersection(difference(mesh[mesh_id_t::all_cells][level],
+            auto expr = intersection(difference(mesh[mesh_id_t::all_cells][level],
                                                            union_(mesh[mesh_id_t::cells][level],
                                                                   mesh[mesh_id_t::proj_cells][level])),
-                                                mesh.domain()),
-                                   difference(mesh[mesh_id_t::overleaves][level],
-                                              union_(mesh[mesh_id_t::union_cells][level],
-                                                     mesh[mesh_id_t::cells_and_ghosts][level])))
+                                                mesh.domain())
                         .on(level);
 
             expr.apply_op(prediction(field));
