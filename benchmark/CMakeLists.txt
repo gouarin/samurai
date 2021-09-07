@@ -20,9 +20,12 @@ include(addGoogleBench)
 find_package(Threads)
 
 set(SAMURAI_BENCHMARKS
-    benchmark_celllist_construction.cpp
-    benchmark_search.cpp
-    benchmark_set.cpp
+    # benchmark_celllist_construction.cpp
+    # benchmark_add_neigh_1d.cpp
+    benchmark_add_neigh_2d.cpp
+    # benchmark_add_neigh.cpp
+    # benchmark_search.cpp
+    # benchmark_set.cpp
     main.cpp
 )
 
@@ -36,7 +39,7 @@ set(SAMURAI_BENCHMARKS
 
 add_executable(bench_samurai ${SAMURAI_BENCHMARKS})
 # target_include_directories(bench_samurai PRIVATE ${SAMURAI_INCLUDE_DIR})
-target_link_libraries(bench_samurai samurai benchmark::benchmark)
+target_link_libraries(bench_samurai samurai benchmark::benchmark xtensor::optimize xtensor::use_xsimd)
 
 # target_include_directories(bench_samurai_lib PRIVATE ${SAMURAI_INCLUDE_DIR})
 # # if(DOWNLOAD_GTEST OR GTEST_SRC_DIR)

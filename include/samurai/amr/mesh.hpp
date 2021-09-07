@@ -57,6 +57,7 @@ namespace samurai
 
             using ca_type = typename base_type::ca_type;
 
+            Mesh(){};
             Mesh(const cl_type &cl, std::size_t min_level, std::size_t max_level);
             Mesh(const Box<double, dim>& b, std::size_t start_level, std::size_t min_level, std::size_t max_level);
 

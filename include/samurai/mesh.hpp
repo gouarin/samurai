@@ -56,6 +56,7 @@ namespace samurai
 
         using mesh_t = samurai::MeshIDArray<ca_type, mesh_id_t>;
 
+        Mesh_base(){};
         Mesh_base(const Mesh_base&) = default;
         Mesh_base& operator=(const Mesh_base&) = default;
 
