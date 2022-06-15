@@ -116,7 +116,7 @@ namespace samurai
         std::size_t min_level = mesh.min_level();
         std::size_t max_level = mesh.max_level();
 
-        constexpr int ghost_width = 1; //mesh_t::config::ghost_width;
+        constexpr int ghost_width = mesh_t::config::graduation_width;
 
         for(std::size_t level = max_level; level > 0; --level)
         {
