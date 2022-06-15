@@ -59,6 +59,7 @@ set(SAMURAI_TESTS
     test_interval.cpp
     test_level_cell_list.cpp
     test_list_of_intervals.cpp
+    test_node_op
     # test_param.cpp
     test_operator_set.cpp
 )

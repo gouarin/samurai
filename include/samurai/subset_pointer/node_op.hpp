@@ -33,6 +33,8 @@ namespace samurai
 
         node_op_impl(const lca_t& lca);
 
+        virtual ~node_op_impl() = default;
+
         virtual node_op_impl* clone() const = 0;
 
         std::size_t size(std::size_t dir) const noexcept;
@@ -368,6 +370,8 @@ namespace samurai
     class node_op
     {
     public:
+        using ptr_t = std::unique_ptr<node_op_impl<Dim, TInterval>>;
+
         node_op(const node_op_impl<Dim, TInterval>& node)
         : p_node(node.clone())
         {
@@ -379,7 +383,7 @@ namespace samurai
 
         node_op& operator=(const node_op& node)
         {
-            node_op_impl<Dim, TInterval> tmp = node.p_impl->clone();
+            ptr_t tmp = node.p_impl->clone();
             std::swap(tmp, p_node);
             return *this;
         }
@@ -389,7 +393,7 @@ namespace samurai
             return p_node->start(dir, index);
         }
     private:
-        node_op_impl<Dim, TInterval>* p_node;
+        ptr_t p_node;
     };
 
 
