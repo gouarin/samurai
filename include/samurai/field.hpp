@@ -429,7 +429,7 @@ namespace samurai
     inline void Field<mesh_t, value_t, size_>::to_stream(std::ostream& os) const
     {
         os << "Field " << m_name << "\n";
-        for_each_cell(this->mesh()[mesh_t::mesh_id_t::all_cells], [&](auto &cell)
+        for_each_cell(this->mesh(), [&](auto &cell)
         {
                 os << "\tlevel: " << cell.level << " coords: " << cell.center()
                     << " value: " << xt::view(m_data, cell.index) << "\n";
