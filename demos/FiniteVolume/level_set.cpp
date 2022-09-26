@@ -211,7 +211,7 @@ int main(int argc, char *argv[])
     std::size_t max_level = 8;
 
     samurai::Box<double, dim> box({0, 0}, {1, 1});
-    using Config = samurai::amr::Config<dim>;
+    using Config = samurai::amr::Config<dim, 3>;
     samurai::amr::Mesh<Config> mesh(box, start_level, min_level, max_level);
 
     double Tf = 3.14; // Final time
