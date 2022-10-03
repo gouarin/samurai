@@ -212,7 +212,7 @@ namespace samurai
         using mesh_type = Mesh;
         static constexpr std::size_t dim = mesh_type::dim;
         using interval_t = typename mesh_type::interval_t;
-        using coord_index_t = typename mesh_type::coord_index_t;
+        using value_t = typename mesh_type::value_t;
 
         mesh_node(const Mesh &v);
 
@@ -232,14 +232,14 @@ namespace samurai
         auto offset(std::size_t d, std::size_t off_ind) const noexcept;
         auto offsets_size(std::size_t d) const noexcept;
         auto interval(std::size_t d, std::size_t index) const noexcept;
-        auto find(std::size_t d, std::size_t start, std::size_t end, coord_index_t coord) const noexcept;
-        auto transform(std::size_t d, coord_index_t coord) const noexcept;
+        auto find(std::size_t d, std::size_t start, std::size_t end, value_t coord) const noexcept;
+        auto transform(std::size_t d, value_t coord) const noexcept;
         const Mesh &data() const noexcept;
         void data(const Mesh &mesh) noexcept;
         std::size_t level() const noexcept;
         bool is_empty() const noexcept;
 
-        auto create_interval(coord_index_t start, coord_index_t end) const
+        auto create_interval(value_t start, value_t end) const
             noexcept;
         auto create_index_yz() const noexcept;
 
@@ -281,7 +281,7 @@ namespace samurai
     {
         if (m_data.empty())
         {
-            return std::numeric_limits<coord_index_t>::max();
+            return std::numeric_limits<value_t>::max();
         }
         return m_data[d][index].start;
     }
@@ -292,7 +292,7 @@ namespace samurai
     {
         if (m_data.empty())
         {
-            return std::numeric_limits<coord_index_t>::max();
+            return std::numeric_limits<value_t>::max();
         }
         return m_data[d][index].end;
     }
@@ -320,13 +320,13 @@ namespace samurai
     template<class Mesh>
     inline auto mesh_node<Mesh>::find(std::size_t d, std::size_t start,
                                       std::size_t end,
-                                      coord_index_t coord) const noexcept
+                                      value_t coord) const noexcept
     {
         return find_on_dim(m_data, d, start, end, coord);
     }
 
     template<class Mesh>
-    inline auto mesh_node<Mesh>::transform(std::size_t /*dim*/, coord_index_t coord) const noexcept
+    inline auto mesh_node<Mesh>::transform(std::size_t /*dim*/, value_t coord) const noexcept
     {
         return coord;
     }
@@ -357,8 +357,8 @@ namespace samurai
     }
 
     template<class Mesh>
-    inline auto mesh_node<Mesh>::create_interval(coord_index_t start,
-                                                 coord_index_t end) const
+    inline auto mesh_node<Mesh>::create_interval(value_t start,
+                                                 value_t end) const
         noexcept
     {
         return interval_t{start, end};
@@ -367,7 +367,7 @@ namespace samurai
     template<class Mesh>
     inline auto mesh_node<Mesh>::create_index_yz() const noexcept
     {
-        return xt::xtensor_fixed<coord_index_t, xt::xshape<dim - 1>>{};
+        return xt::xtensor_fixed<value_t, xt::xshape<dim - 1>>{};
     }
 
     /***********************************
@@ -380,9 +380,9 @@ namespace samurai
         using mesh_type = typename T::mesh_type;
         static constexpr std::size_t dim = mesh_type::dim;
         using interval_t = typename mesh_type::interval_t;
-        using coord_index_t = typename mesh_type::coord_index_t;
+        using value_t = typename mesh_type::value_t;
         using stencil_t =
-            typename xt::xtensor_fixed<coord_index_t, xt::xshape<dim>>;
+            typename xt::xtensor_fixed<value_t, xt::xshape<dim>>;
 
         translate_op(T &&v, stencil_t &&stencil);
         translate_op(const T &v, const stencil_t &stencil);
@@ -390,9 +390,9 @@ namespace samurai
         auto start(std::size_t d, std::size_t index) const noexcept;
         auto end(std::size_t d, std::size_t index) const noexcept;
 
-        auto transform(std::size_t d, coord_index_t coord) const noexcept;
+        auto transform(std::size_t d, value_t coord) const noexcept;
 
-        auto create_interval(coord_index_t start, coord_index_t end) const
+        auto create_interval(value_t start, value_t end) const
             noexcept;
         auto create_index_yz() const noexcept;
 
@@ -433,15 +433,15 @@ namespace samurai
 
     template<class T>
     inline auto
-    translate_op<T>::transform(std::size_t d, coord_index_t coord) const noexcept
+    translate_op<T>::transform(std::size_t d, value_t coord) const noexcept
     {
         return coord - m_stencil[d];
     }
 
     template<class T>
     inline auto
-    translate_op<T>::create_interval(coord_index_t start,
-                                             coord_index_t end) const noexcept
+    translate_op<T>::create_interval(value_t start,
+                                             value_t end) const noexcept
     {
         return interval_t{start, end};
     }
@@ -449,7 +449,7 @@ namespace samurai
     template<class T>
     inline auto translate_op<T>::create_index_yz() const noexcept
     {
-        return xt::xtensor_fixed<coord_index_t, xt::xshape<dim - 1>>{};
+        return xt::xtensor_fixed<value_t, xt::xshape<dim - 1>>{};
     }
 
     /*****************************
@@ -462,7 +462,7 @@ namespace samurai
         using mesh_type = typename T::mesh_type;
         static constexpr std::size_t dim = mesh_type::dim;
         using interval_t = typename mesh_type::interval_t;
-        using coord_index_t = typename mesh_type::coord_index_t;
+        using value_t = typename mesh_type::value_t;
 
         contraction_op(const T& v, std::size_t size = 1);
         contraction_op(const T& v, const std::array<std::size_t, dim>& contraction);
@@ -470,7 +470,7 @@ namespace samurai
         auto start(std::size_t d, std::size_t index) const noexcept;
         auto end(std::size_t d, std::size_t index) const noexcept;
 
-        auto create_interval(coord_index_t start, coord_index_t end) const noexcept;
+        auto create_interval(value_t start, value_t end) const noexcept;
         auto create_index_yz() const noexcept;
 
       private:
@@ -501,19 +501,19 @@ namespace samurai
     inline auto contraction_op<T>::start(std::size_t d,
                                          std::size_t index) const noexcept
     {
-        return m_data.start(d, index) + static_cast<coord_index_t>(m_contraction[d]);
+        return m_data.start(d, index) + static_cast<value_t>(m_contraction[d]);
     }
 
     template<class T>
     inline auto contraction_op<T>::end(std::size_t d, std::size_t index) const
         noexcept
     {
-        return m_data.end(d, index) - + static_cast<coord_index_t>(m_contraction[d]);
+        return m_data.end(d, index) - + static_cast<value_t>(m_contraction[d]);
     }
 
     template<class T>
-    inline auto contraction_op<T>::create_interval(coord_index_t start,
-                                                   coord_index_t end) const
+    inline auto contraction_op<T>::create_interval(value_t start,
+                                                   value_t end) const
         noexcept
     {
         return interval_t{start, end};
@@ -522,7 +522,7 @@ namespace samurai
     template<class T>
     inline auto contraction_op<T>::create_index_yz() const noexcept
     {
-        return xt::xtensor_fixed<coord_index_t, xt::xshape<dim - 1>>{};
+        return xt::xtensor_fixed<value_t, xt::xshape<dim - 1>>{};
     }
 
     /*****************************
@@ -535,7 +535,7 @@ namespace samurai
         using mesh_type = typename T::mesh_type;
         static constexpr std::size_t dim = mesh_type::dim;
         using interval_t = typename mesh_type::interval_t;
-        using coord_index_t = typename mesh_type::coord_index_t;
+        using value_t = typename mesh_type::value_t;
 
         expand_op(T &&v);
         expand_op(const T &v);
@@ -543,7 +543,7 @@ namespace samurai
         auto start(std::size_t d, std::size_t index) const noexcept;
         auto end(std::size_t d, std::size_t index) const noexcept;
 
-        auto create_interval(coord_index_t start, coord_index_t end) const
+        auto create_interval(value_t start, value_t end) const
             noexcept;
         auto create_index_yz() const noexcept;
 
@@ -580,8 +580,8 @@ namespace samurai
     }
 
     template<class T>
-    inline auto expand_op<T>::create_interval(coord_index_t start,
-                                              coord_index_t end) const noexcept
+    inline auto expand_op<T>::create_interval(value_t start,
+                                              value_t end) const noexcept
     {
         return interval_t{start, end};
     }
@@ -589,7 +589,7 @@ namespace samurai
     template<class T>
     inline auto expand_op<T>::create_index_yz() const noexcept
     {
-        return xt::xtensor_fixed<coord_index_t, xt::xshape<dim - 1>>{};
+        return xt::xtensor_fixed<value_t, xt::xshape<dim - 1>>{};
     }
 
     namespace detail
