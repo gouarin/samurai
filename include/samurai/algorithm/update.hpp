@@ -186,8 +186,7 @@ namespace samurai
 
         xt::xtensor_fixed<interval_value_t, xt::xshape<dim>> stencil;
         auto mesh = tag.mesh();
-        std::size_t min_level = mesh[mesh_id_t::reference].min_level();
-        std::size_t max_level = mesh[mesh_id_t::reference].max_level();
+
         auto domain = mesh.domain();
         auto min_indices = domain.min_indices();
         auto max_indices = domain.max_indices();

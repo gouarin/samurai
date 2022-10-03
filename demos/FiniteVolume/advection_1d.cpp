@@ -20,18 +20,16 @@ template <class Mesh>
 auto init(Mesh& mesh)
 {
     auto u = samurai::make_field<double, 1>("u", mesh);
+    u.fill(0.);
 
     samurai::for_each_cell(mesh, [&](auto &cell) {
         auto center = cell.center();
         double radius = .2;
-        double x_center = 0;
+
+        double x_center = 1.5;
         if (std::abs(center[0] - x_center) <= radius)
         {
             u[cell] = 1;
-        }
-        else
-        {
-            u[cell] = 0;
         }
     });
 
@@ -125,6 +123,7 @@ int main(int argc, char *argv[])
 
     // Simulation parameters
     double left_box = -2, right_box = 2;
+    bool is_periodic = true;
     double a = 1.;
     double Tf = 1.;
     double cfl = 0.95;
@@ -143,6 +142,7 @@ int main(int argc, char *argv[])
     CLI::App app{"Finite volume example for the advection equation in 1d using multiresolution"};
     app.add_option("--left", left_box, "The left border of the box")->capture_default_str()->group("Simulation parameters");
     app.add_option("--right", right_box, "The right border of the box")->capture_default_str()->group("Simulation parameters");
+    app.add_flag("--periodic", is_periodic, "Set the domain periodic")->capture_default_str()->group("Simulation parameters");
     app.add_option("--velocity", a, "The velocity of the advection equation")->capture_default_str()->group("Simulation parameters");
     app.add_option("--cfl", cfl, "The CFL")->capture_default_str()->group("Simulation parameters");
     app.add_option("--Tf", Tf, "Final time")->capture_default_str()->group("Simulation parameters");
@@ -157,7 +157,7 @@ int main(int argc, char *argv[])
     CLI11_PARSE(app, argc, argv);
 
     samurai::Box<double, dim> box({left_box}, {right_box});
-    samurai::MRMesh<Config> mesh{box, min_level, max_level};
+    samurai::MRMesh<Config> mesh{box, min_level, max_level, {is_periodic}};
 
     double dt = cfl/(1<<max_level);
     double dt_save = Tf/static_cast<double>(nfiles);
@@ -192,6 +192,7 @@ int main(int argc, char *argv[])
 
         samurai::update_ghost_mr(u, update_bc);
         unp1.resize();
+        unp1.fill(0);
         unp1 = u - dt * samurai::upwind(a, u);
         if (correction)
         {
