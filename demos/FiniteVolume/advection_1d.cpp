@@ -13,25 +13,28 @@
 #include <samurai/hdf5.hpp>
 #include <samurai/subset/subset_op.hpp>
 
+<<<<<<< HEAD
 #include <filesystem>
 namespace fs = std::filesystem;
+=======
+#include <xtensor/xfixed.hpp>
+#include <cxxopts.hpp>
+>>>>>>> dd8cb49 (add periodicity to advection 1d)
 
 template <class Mesh>
 auto init(Mesh& mesh)
 {
     auto u = samurai::make_field<double, 1>("u", mesh);
+    u.fill(0.);
 
     samurai::for_each_cell(mesh, [&](auto &cell) {
         auto center = cell.center();
         double radius = .2;
-        double x_center = 0;
+
+        double x_center = mesh.is_periodic(0)? 8: 2;
         if (std::abs(center[0] - x_center) <= radius)
         {
             u[cell] = 1;
-        }
-        else
-        {
-            u[cell] = 0;
         }
     });
 
@@ -120,6 +123,19 @@ void save(const fs::path& path, const std::string& filename, const Field& u, con
 
 int main(int argc, char *argv[])
 {
+    cxxopts::Options options("advection",
+                             "Multi resolution for advection equations");
+
+    options.add_options()
+                       ("min_level", "minimum level", cxxopts::value<std::size_t>()->default_value("2"))
+                       ("max_level", "maximum level", cxxopts::value<std::size_t>()->default_value("10"))
+                       ("epsilon", "maximum level", cxxopts::value<double>()->default_value("0.01"))
+                       ("s", "relaxation parameter", cxxopts::value<double>()->default_value("1.0"))
+                       ("periodic", "periodic boundary condition", cxxopts::value<bool>()->default_value("false"))
+                       ("h, help", "Help");
+
+    auto result = options.parse(argc, argv);
+
     constexpr size_t dim = 1;
     using Config = samurai::MRConfig<dim>;
 
@@ -192,6 +208,7 @@ int main(int argc, char *argv[])
 
         samurai::update_ghost_mr(u, update_bc);
         unp1.resize();
+        unp1.fill(0);
         unp1 = u - dt * samurai::upwind(a, u);
         if (correction)
         {
