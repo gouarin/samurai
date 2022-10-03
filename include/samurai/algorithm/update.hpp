@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <xtensor/xfixed.hpp>
+
 #include "../subset/subset_op.hpp"
 #include "../mr/operators.hpp"
 #include "utils.hpp"
@@ -92,13 +94,16 @@ namespace samurai
         std::size_t min_level = mesh.min_level();
         std::size_t max_level = mesh.max_level();
 
+        update_ghost_periodic(field);
         for (std::size_t level = max_level; level >= 1; --level)
-            {
+        {
             auto set_at_levelm1 = intersection(mesh[mesh_id_t::reference][level],
                                                mesh[mesh_id_t::proj_cells][level-1])
                                  .on(level - 1);
             set_at_levelm1.apply_op(projection(field));
         }
+
+        update_ghost_periodic(field);
 
         for (std::size_t level = min_level; level <= max_level; ++level)
         {
@@ -111,6 +116,110 @@ namespace samurai
             update_bc_for_level(field, level-1);
             expr.apply_op(prediction<1, false>(field));
             update_bc_for_level(field, level);
+        }
+        update_ghost_periodic(field);
+    }
+
+    template<class Field>
+    void update_ghost_periodic(Field& field)
+    {
+        using mesh_id_t = typename Field::mesh_t::mesh_id_t;
+        using config = typename Field::mesh_t::config;
+        using interval_value_t = typename Field::interval_t::value_t;
+        constexpr std::size_t dim = Field::dim;
+
+        xt::xtensor_fixed<interval_value_t, xt::xshape<dim>> stencil;
+        auto mesh = field.mesh();
+        std::size_t min_level = mesh[mesh_id_t::reference].min_level();
+        std::size_t max_level = mesh[mesh_id_t::reference].max_level();
+        auto domain = mesh.domain();
+        auto min_indices = domain.min_indices();
+        auto max_indices = domain.max_indices();
+
+        for (std::size_t level = min_level; level <= max_level; ++level)
+        {
+            // auto set = difference(mesh[mesh_id_t::reference][level], domain)
+            //                      .on(level);
+            // set([&](auto& i, auto)
+            // {
+            //     field(level, i) = 0.;
+            // });
+
+            std::size_t delta_l = domain.level() - level;
+            for (std::size_t d = 0; d < dim; ++d)
+            {
+                if (mesh.is_periodic(d))
+                {
+                    stencil.fill(0);
+                    stencil(d) = max_indices[d] - min_indices[d];
+                    auto set1 = intersection(intersection(mesh[mesh_id_t::reference][level],
+                                                        translate(domain, stencil - (config::ghost_width<<delta_l))),
+                                            domain)
+                                .on(level);
+                    set1([&](auto& i, auto)
+                    {
+                        field(level, i - (stencil[0]>>delta_l)) = field(level, i);
+                    });
+
+                    auto set2 = intersection(intersection(mesh[mesh_id_t::reference][level],
+                                           translate(domain, -stencil + (config::ghost_width<<delta_l))),
+                                           domain)
+                                .on(level);
+
+                    set2([&](auto& i, auto)
+                    {
+                        field(level, i + (stencil[0]>>delta_l)) = field(level, i);
+                    });
+                }
+            }
+        }
+
+    }
+
+    template<class Tag>
+    void update_tag_periodic(std::size_t level, Tag& tag)
+    {
+        using mesh_id_t = typename Tag::mesh_t::mesh_id_t;
+        using config = typename Tag::mesh_t::config;
+        using interval_value_t = typename Tag::interval_t::value_t;
+        constexpr std::size_t dim = Tag::dim;
+
+        xt::xtensor_fixed<interval_value_t, xt::xshape<dim>> stencil;
+        auto mesh = tag.mesh();
+        std::size_t min_level = mesh[mesh_id_t::reference].min_level();
+        std::size_t max_level = mesh[mesh_id_t::reference].max_level();
+        auto domain = mesh.domain();
+        auto min_indices = domain.min_indices();
+        auto max_indices = domain.max_indices();
+
+        std::size_t delta_l = domain.level() - level;
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            if (mesh.is_periodic(d))
+            {
+                stencil.fill(0);
+                stencil(d) = max_indices[d] - min_indices[d];
+                auto set1 = intersection(intersection(mesh[mesh_id_t::reference][level],
+                                                    translate(domain, stencil - (config::ghost_width<<delta_l))),
+                                        domain)
+                            .on(level);
+                set1([&](auto& i, auto)
+                {
+                     tag(level, i) |= tag(level, i - (stencil[0]>>delta_l));
+                     tag(level, i - (stencil[0]>>delta_l)) |= tag(level, i);
+                });
+
+                auto set2 = intersection(intersection(mesh[mesh_id_t::reference][level],
+                                        translate(domain, -stencil + (config::ghost_width<<delta_l))),
+                                        domain)
+                            .on(level);
+
+                set2([&](auto& i, auto)
+                {
+                    tag(level, i) |= tag(level, i + (stencil[0]>>delta_l));
+                    tag(level, i + (stencil[0]>>delta_l)) |= tag(level, i);
+                });
+            }
         }
     }
 
@@ -273,7 +382,7 @@ namespace samurai
             }
         });
 
-        mesh_t new_mesh = {cl, mesh.min_level(), mesh.max_level()};
+        mesh_t new_mesh = {cl, mesh.min_level(), mesh.max_level(), mesh.periodicity()};
 
         if (mesh == new_mesh)
         {
