@@ -354,6 +354,7 @@ namespace samurai
         using cl_type = typename Field::mesh_t::cl_type;
 
         auto mesh = field.mesh();
+        auto old_mesh = old_field.mesh();
 
         cl_type cl;
 
@@ -389,6 +390,13 @@ namespace samurai
             return true;
         }
 
+        if (new_mesh == old_mesh)
+        {
+            field.mesh_ptr()->swap(old_mesh);
+            std::swap(field.array(), old_field.array());
+            return true;
+        }
+
         Field new_field("new_f", new_mesh);
         new_field.fill(0);
 
@@ -415,7 +423,6 @@ namespace samurai
             set_refine.apply_op(prediction<pred_order, true>(new_field, field));
         }
 
-        auto old_mesh = old_field.mesh();
         for (std::size_t level = min_level; level <= max_level; ++level)
         {
             auto subset = intersection(intersection(old_mesh[mesh_id_t::cells][level],
