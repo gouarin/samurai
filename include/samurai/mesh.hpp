@@ -237,8 +237,8 @@ namespace samurai
     template<typename... T>
     inline std::size_t Mesh_base<D, Config>::get_index(std::size_t level, coord_index_t i, T... index) const
     {
-        auto interval = m_cells[mesh_id_t::reference].get_interval(level, interval_t{i, i +1}, index...);
-        return interval.index + i;
+        auto interval = m_cells[mesh_id_t::reference].get_interval(level, interval_t{i, i+1}, index...);
+        return static_cast<std::size_t>(interval.index + i);
     }
 
     template<class D, class Config>

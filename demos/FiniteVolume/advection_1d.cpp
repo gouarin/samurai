@@ -123,7 +123,7 @@ int main(int argc, char *argv[])
 
     // Simulation parameters
     double left_box = -2, right_box = 2;
-    bool is_periodic = true;
+    bool is_periodic = false;
     double a = 1.;
     double Tf = 1.;
     double cfl = 0.95;
@@ -166,9 +166,12 @@ int main(int argc, char *argv[])
     auto u = init(mesh);
     auto unp1 = samurai::make_field<double, 1>("unp1", mesh);
 
-    auto update_bc = [](auto& field, std::size_t level)
+    auto update_bc = [is_periodic](auto& field, std::size_t level)
     {
-        dirichlet(level, field);
+        if (!is_periodic)
+        {
+            dirichlet(level, field);
+        }
     };
 
     auto MRadaptation = samurai::make_MRAdapt(u, update_bc);
