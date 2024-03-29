@@ -55,6 +55,24 @@ struct std::hash<std::tuple<T...>>
 
 namespace samurai
 {
+    template <class Config>
+    class UniformMesh;
+
+    namespace detail
+    {
+        template <class Mesh, class mesh_id_t>
+        const auto& get_lca(const Mesh& mesh, mesh_id_t id, std::size_t level)
+        {
+            return mesh[id][level];
+        }
+
+        template <class Config, class mesh_id_t>
+        const auto& get_lca(const UniformMesh<Config>& mesh, mesh_id_t id, std::size_t level)
+        {
+            return mesh[id];
+        }
+    }
+
     template <class T>
     class subset_node;
 

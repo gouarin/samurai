@@ -161,6 +161,16 @@ namespace samurai
         auto max_indices() const;
         auto minmax_indices() const;
 
+        std::size_t min_level() const
+        {
+            return m_level;
+        }
+
+        std::size_t max_level() const
+        {
+            return m_level;
+        }
+
       private:
 
 #ifdef SAMURAI_WITH_MPI

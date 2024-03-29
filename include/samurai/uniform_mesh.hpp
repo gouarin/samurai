@@ -28,10 +28,13 @@ namespace samurai
     template <std::size_t dim_, int ghost_width_ = default_config::ghost_width, class TInterval = default_config::interval_t>
     struct UniformConfig
     {
-        static constexpr std::size_t dim = dim_;
-        static constexpr int ghost_width = ghost_width_;
-        using interval_t                 = TInterval;
-        using mesh_id_t                  = UniformMeshId;
+        static constexpr std::size_t dim       = dim_;
+        static constexpr int ghost_width       = ghost_width_;
+        static constexpr int prediction_order  = ghost_width_;
+        static constexpr int max_stencil_width = ghost_width_;
+
+        using interval_t = TInterval;
+        using mesh_id_t  = UniformMeshId;
     };
 
     template <class Config>
@@ -43,14 +46,18 @@ namespace samurai
 
         static constexpr std::size_t dim = config::dim;
 
-        using mesh_id_t     = typename config::mesh_id_t;
-        using interval_t    = typename config::interval_t;
-        using coord_index_t = typename interval_t::coord_index_t;
+        using mesh_id_t  = typename config::mesh_id_t;
+        using interval_t = typename config::interval_t;
+        using value_t    = typename interval_t::value_t;
+        using index_t    = typename interval_t::index_t;
 
+        using cell_t  = Cell<dim, interval_t>;
         using cl_type = LevelCellList<dim, interval_t>;
         using ca_type = LevelCellArray<dim, interval_t>;
 
         using mesh_t = MeshIDArray<ca_type, mesh_id_t>;
+
+        using mesh_interval_t = typename ca_type::mesh_interval_t;
 
         UniformMesh(const cl_type& cl);
         UniformMesh(const Box<double, dim>& b, std::size_t level);
@@ -63,11 +70,46 @@ namespace samurai
 
         template <typename... T>
         const interval_t& get_interval(std::size_t level, const interval_t& interval, T... index) const;
+        template <class E>
+        const interval_t& get_interval(std::size_t level, const interval_t& interval, const xt::xexpression<E>& index) const;
+        template <class E>
+        const interval_t& get_interval(std::size_t level, const xt::xexpression<E>& coord) const;
 
-        template <class T1, typename... T>
-        std::size_t get_index(T1 i, T... index) const;
+        template <typename... T>
+        index_t get_index(std::size_t level, value_t i, T... index) const;
+        template <class E>
+        index_t get_index(std::size_t level, value_t i, const xt::xexpression<E>& others) const;
+        template <class E>
+        index_t get_index(std::size_t level, const xt::xexpression<E>& coord) const;
+
+        template <typename... T>
+        cell_t get_cell(std::size_t level, value_t i, T... index) const;
+        template <class E>
+        cell_t get_cell(std::size_t level, value_t i, const xt::xexpression<E>& index) const;
+        template <class E>
+        cell_t get_cell(std::size_t level, const xt::xexpression<E>& coord) const;
 
         void to_stream(std::ostream& os) const;
+
+        inline bool is_periodic(std::size_t d) const
+        {
+            return false;
+        }
+
+        std::size_t min_level() const
+        {
+            return m_cells[mesh_id_t::reference].min_level();
+        }
+
+        std::size_t max_level() const
+        {
+            return m_cells[mesh_id_t::reference].max_level();
+        }
+
+        const auto& domain() const
+        {
+            return m_cells[mesh_id_t::cells];
+        }
 
       private:
 
@@ -105,21 +147,6 @@ namespace samurai
     inline auto UniformMesh<Config>::operator[](mesh_id_t mesh_id) const -> const ca_type&
     {
         return m_cells[mesh_id];
-    }
-
-    template <class Config>
-    template <typename... T>
-    inline auto UniformMesh<Config>::get_interval(std::size_t, const interval_t& interval, T... index) const -> const interval_t&
-    {
-        return m_cells[mesh_id_t::reference].get_interval(interval, index...);
-    }
-
-    template <class Config>
-    template <class T1, typename... T>
-    inline std::size_t UniformMesh<Config>::get_index(T1 i, T... index) const
-    {
-        auto interval = m_cells[mesh_id_t::reference].get_interval(interval_t{i, i + 1}, index...);
-        return interval.index + i;
     }
 
     template <class Config>
@@ -197,6 +224,71 @@ namespace samurai
         mesh.to_stream(out);
         return out;
     }
+
+    template <class Config>
+    template <typename... T>
+    inline auto UniformMesh<Config>::get_interval(std::size_t level, const interval_t& interval, T... index) const -> const interval_t&
+    {
+        return m_cells[mesh_id_t::reference].get_interval(interval, index...);
+    }
+
+    template <class Config>
+    template <class E>
+    inline auto UniformMesh<Config>::get_interval(std::size_t level, const interval_t& interval, const xt::xexpression<E>& index) const
+        -> const interval_t&
+    {
+        return m_cells[mesh_id_t::reference].get_interval(interval, index);
+    }
+
+    template <class Config>
+    template <class E>
+    inline auto UniformMesh<Config>::get_interval(std::size_t level, const xt::xexpression<E>& coord) const -> const interval_t&
+    {
+        return m_cells[mesh_id_t::reference].get_interval(coord);
+    }
+
+    template <class Config>
+    template <typename... T>
+    inline auto UniformMesh<Config>::get_index(std::size_t level, value_t i, T... index) const -> index_t
+    {
+        return m_cells[mesh_id_t::reference].get_index(i, index...);
+    }
+
+    template <class Config>
+    template <class E>
+    inline auto UniformMesh<Config>::get_index(std::size_t level, value_t i, const xt::xexpression<E>& others) const -> index_t
+    {
+        return m_cells[mesh_id_t::reference].get_index(i, others);
+    }
+
+    template <class Config>
+    template <class E>
+    inline auto UniformMesh<Config>::get_index(std::size_t level, const xt::xexpression<E>& coord) const -> index_t
+    {
+        return m_cells[mesh_id_t::reference].get_index(coord);
+    }
+
+    template <class Config>
+    template <typename... T>
+    inline auto UniformMesh<Config>::get_cell(std::size_t level, value_t i, T... index) const -> cell_t
+    {
+        return m_cells[mesh_id_t::reference].get_cell(i, index...);
+    }
+
+    template <class Config>
+    template <class E>
+    inline auto UniformMesh<Config>::get_cell(std::size_t level, value_t i, const xt::xexpression<E>& index) const -> cell_t
+    {
+        return m_cells[mesh_id_t::reference].get_cell(i, index);
+    }
+
+    template <class Config>
+    template <class E>
+    inline auto UniformMesh<Config>::get_cell(std::size_t level, const xt::xexpression<E>& coord) const -> cell_t
+    {
+        return m_cells[mesh_id_t::reference].get_cell(coord);
+    }
+
 } // namespace samurai
 
 template <>

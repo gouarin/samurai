@@ -1,6 +1,7 @@
 #pragma once
 #include "boundary.hpp"
 #include "stencil.hpp"
+#include "utils.hpp"
 
 namespace samurai
 {
@@ -90,7 +91,7 @@ namespace samurai
 
         Stencil<2, dim> interface_stencil = in_out_stencil<dim>(direction);
 
-        auto& cells        = mesh[mesh_id_t::cells][level];
+        auto& cells        = detail::get_lca(mesh, mesh_id_t::cells, level);
         auto shifted_cells = translate(cells, -direction);
         auto intersect     = intersection(cells, shifted_cells);
 
@@ -165,8 +166,8 @@ namespace samurai
         int direction_index_int = find(comput_stencil, direction);
         auto direction_index    = static_cast<std::size_t>(direction_index_int);
 
-        auto& coarse_cells = mesh[mesh_id_t::cells][level];
-        auto& fine_cells   = mesh[mesh_id_t::cells][level + 1];
+        auto& coarse_cells = detail::get_lca(mesh, mesh_id_t::cells, level);
+        auto& fine_cells   = detail::get_lca(mesh, mesh_id_t::cells, level + 1);
 
         auto shifted_fine_cells = translate(fine_cells, -direction);
         auto fine_intersect     = intersection(coarse_cells, shifted_fine_cells).on(level + 1);
@@ -236,8 +237,8 @@ namespace samurai
         auto minus_direction_index                             = static_cast<std::size_t>(minus_direction_index_int);
         auto minus_comput_stencil_it                           = make_stencil_iterator(mesh, minus_comput_stencil);
 
-        auto& coarse_cells = mesh[mesh_id_t::cells][level];
-        auto& fine_cells   = mesh[mesh_id_t::cells][level + 1];
+        auto& coarse_cells = detail::get_lca(mesh, mesh_id_t::cells, level);
+        auto& fine_cells   = detail::get_lca(mesh, mesh_id_t::cells, level + 1);
 
         auto shifted_fine_cells = translate(fine_cells, direction);
         auto fine_intersect     = intersection(coarse_cells, shifted_fine_cells).on(level + 1);

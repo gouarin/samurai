@@ -43,6 +43,22 @@ namespace samurai
         }
     }
 
+    template <std::size_t dim_, class TInterval, class Func>
+    inline void for_each_level(const LevelCellArray<dim_, TInterval>& mesh, Func&& f, bool include_empty_levels = false)
+    {
+        f(mesh.level());
+    }
+
+    template <class Config>
+    class UniformMesh;
+
+    template <class Config, class Func>
+    inline void for_each_level(const UniformMesh<Config>& mesh, Func&& f, bool include_empty_levels = false)
+    {
+        using mesh_id_t = typename UniformMesh<Config>::mesh_id_t;
+        f(mesh[mesh_id_t::cells].level());
+    }
+
     template <class Mesh, class Func>
     inline void for_each_level(Mesh& mesh, Func&& f, bool include_empty_levels = false)
     {

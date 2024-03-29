@@ -1,6 +1,7 @@
 #pragma once
 #include "indices.hpp"
 #include "static_algorithm.hpp"
+#include "utils.hpp"
 
 namespace samurai
 {
@@ -224,7 +225,7 @@ namespace samurai
     inline void for_each_stencil(const Mesh& mesh, std::size_t level, IteratorStencil<Mesh, stencil_size>& stencil_it, Func&& f)
     {
         using mesh_id_t = typename Mesh::mesh_id_t;
-        for_each_meshinterval(mesh[mesh_id_t::cells][level],
+        for_each_meshinterval(detail::get_lca(mesh, mesh_id_t::cells, level),
                               [&](auto mesh_interval)
                               {
                                   for_each_stencil_sliding_in_interval(mesh_interval, stencil_it, std::forward<Func>(f));

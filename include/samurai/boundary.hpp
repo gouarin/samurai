@@ -1,5 +1,6 @@
 #pragma once
 #include "stencil.hpp"
+#include "utils.hpp"
 
 namespace samurai
 {
@@ -8,7 +9,7 @@ namespace samurai
     {
         using mesh_id_t = typename Mesh::mesh_id_t;
 
-        auto& cells  = mesh[mesh_id_t::cells][level];
+        auto& cells  = detail::get_lca(mesh, mesh_id_t::cells, level);
         auto& domain = mesh.domain();
 
         auto max_level    = domain.level(); // domain.level();//mesh[mesh_id_t::cells].max_level();
@@ -29,7 +30,7 @@ namespace samurai
         for_each_level(mesh,
                        [&](std::size_t level)
                        {
-                           auto bdry   = intersection(mesh[mesh_id_t::cells][level], boundary_region).on(level);
+                           auto bdry   = intersection(detail::get_lca(mesh, mesh_id_t::cells, level), boundary_region).on(level);
                            auto coeffs = get_coefficients(cell_length(level));
                            for_each_stencil(mesh,
                                             bdry,
@@ -54,7 +55,7 @@ namespace samurai
         for_each_level(mesh,
                        [&](std::size_t level)
                        {
-                           auto bdry = intersection(mesh[mesh_id_t::cells][level], boundary_region).on(level);
+                           auto bdry = intersection(detail::get_lca(mesh, mesh_id_t::cells, level), boundary_region).on(level);
 
                            std::array<equation_coeffs_t, nb_equations> equations_coeffs;
                            for (std::size_t i = 0; i < nb_equations; ++i)
