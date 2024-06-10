@@ -96,6 +96,7 @@ namespace samurai
         bool is_periodic(std::size_t d) const;
         const std::array<bool, dim>& periodicity() const;
         // std::vector<int>& neighbouring_ranks();
+        const std::vector<mpi_subdomain_t>& mpi_neighbourhood() const;
         std::vector<mpi_subdomain_t>& mpi_neighbourhood();
 
         void swap(Mesh_base& mesh) noexcept;
@@ -417,6 +418,12 @@ namespace samurai
     inline auto Mesh_base<D, Config>::periodicity() const -> const std::array<bool, dim>&
     {
         return m_periodic;
+    }
+
+    template <class D, class Config>
+    inline auto Mesh_base<D, Config>::mpi_neighbourhood() const -> const std::vector<mpi_subdomain_t>&
+    {
+        return m_mpi_neighbourhood;
     }
 
     template <class D, class Config>

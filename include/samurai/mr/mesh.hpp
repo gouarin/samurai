@@ -224,6 +224,24 @@ namespace samurai
                             }
                         });
                 }
+                for (std::size_t level = 0; level <= max_level; ++level)
+                {
+                    auto directions = cartesian_directions<dim>();
+                    for (std::size_t id = 0; id < directions.shape()[0]; ++id)
+                    {
+                        auto d    = xt::view(directions, id);
+                        auto expr = intersection(translate(this->cells()[mesh_id_t::cells][level], d),
+                                                 neighbour.mesh[mesh_id_t::cells][level + 1])
+                                        .on(level + 1);
+
+                        expr(
+                            [&](const auto& interval, const auto& index_yz)
+                            {
+                                lcl_type& lcl = cell_list[level + 1];
+                                lcl[index_yz].add_interval(interval);
+                            });
+                    }
+                }
             }
             this->cells()[mesh_id_t::all_cells] = {cell_list, false};
 
