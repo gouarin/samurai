@@ -64,6 +64,24 @@ namespace samurai
             auto min_level = mesh[mesh_id_t::cells].min_level();
             auto max_level = mesh[mesh_id_t::cells].max_level();
 
+            for (auto& neigbour : mesh.mpi_neighbourhood())
+            {
+                if (neigbour.mesh[mesh_id_t::cells].min_level() < min_level)
+                {
+                    min_level--;
+                    break;
+                }
+            }
+
+            for (auto& neigbour : mesh.mpi_neighbourhood())
+            {
+                if (neigbour.mesh[mesh_id_t::cells].max_level() > max_level)
+                {
+                    max_level++;
+                    break;
+                }
+            }
+
             for (std::size_t d = 0; d < dim; ++d)
             {
                 auto& flux_def = flux_definition()[d];
