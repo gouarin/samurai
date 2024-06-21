@@ -200,6 +200,9 @@ namespace samurai
     {
         auto& mesh = m_fields.mesh();
 
+        xt::xtensor_fixed<double, xt::xshape<mesh_t::max_refinement_level, detail_t::size>> m_max_detail;
+        m_max_detail.fill(std::numeric_limits<double>::min());
+
         std::size_t min_level = mesh.min_level();
         std::size_t max_level = mesh.max_level();
 
@@ -218,11 +221,20 @@ namespace samurai
         update_ghost_mr(m_fields);
         times::timers.start("mesh adaptation");
 
-        for (std::size_t level = ((min_level > 0) ? min_level - 1 : 0); level < max_level - ite; ++level)
+        // for (std::size_t level = ((min_level > 0) ? min_level - 1 : 0); level < max_level - ite; ++level)
+        for (std::size_t level = ((min_level > 0) ? min_level - 1 : 0); level < max_level; ++level)
         {
             auto subset = intersection(mesh[mesh_id_t::all_cells][level], mesh[mesh_id_t::cells][level + 1]).on(level);
             subset.apply_op(compute_detail(m_detail, m_fields));
+            subset.apply_op(compute_max_detail(m_detail, m_max_detail));
         }
+        auto maxd = xt::eval(xt::amax(m_max_detail, {0}));
+        for_each_cell(mesh[mesh_id_t::reference],
+                      [&](auto& cell)
+                      {
+                          m_detail[cell] = m_detail[cell] / maxd;
+                      });
+
         update_ghost_subdomains(m_detail);
 
         for (std::size_t level = min_level; level <= max_level - ite; ++level)
