@@ -45,104 +45,105 @@ auto init(Mesh& mesh)
     return u;
 }
 
-template <class Field>
-void flux_correction(double dt, const std::array<double, 2>& a, const Field& u, Field& unp1)
-{
-    using mesh_t              = typename Field::mesh_t;
-    using mesh_id_t           = typename mesh_t::mesh_id_t;
-    using interval_t          = typename mesh_t::interval_t;
-    constexpr std::size_t dim = Field::dim;
+// template <class Field>
+// void flux_correction(double dt, const std::array<double, 2>& a, const Field& u, Field& unp1)
+// {
+//     using mesh_t              = typename Field::mesh_t;
+//     using mesh_id_t           = typename mesh_t::mesh_id_t;
+//     using interval_t          = typename mesh_t::interval_t;
+//     constexpr std::size_t dim = Field::dim;
 
-    auto mesh = u.mesh();
+//     auto mesh = u.mesh();
 
-    for (std::size_t level = mesh.min_level(); level < mesh.max_level(); ++level)
-    {
-        xt::xtensor_fixed<int, xt::xshape<dim>> stencil;
+//     for (std::size_t level = mesh.min_level(); level < mesh.max_level(); ++level)
+//     {
+//         xt::xtensor_fixed<int, xt::xshape<dim>> stencil;
 
-        stencil = {
-            {-1, 0}
-        };
+//         stencil = {
+//             {-1, 0}
+//         };
 
-        auto subset_right = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
-                                                  mesh[mesh_id_t::cells][level])
-                                .on(level);
+//         auto subset_right = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
+//                                                   mesh[mesh_id_t::cells][level])
+//                                 .on(level);
 
-        subset_right(
-            [&](const auto& i, const auto& index)
-            {
-                auto j          = index[0];
-                const double dx = samurai::cell_length(level);
+//         subset_right(
+//             [&](const auto& i, const auto& index)
+//             {
+//                 auto j          = index[0];
+//                 const double dx = samurai::cell_length(level);
 
-                unp1(level, i, j) = unp1(level, i, j)
-                                  + dt / dx
-                                        * (samurai::upwind_op<dim, interval_t>(level, i, j).right_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j).right_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j + 1).right_flux(a, u));
-            });
+//                 unp1(level, i, j) = unp1(level, i, j)
+//                                   + dt / dx
+//                                         * (samurai::upwind_op<dim, interval_t>(level, i, j).right_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j).right_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j + 1).right_flux(a, u));
+//             });
 
-        stencil = {
-            {1, 0}
-        };
+//         stencil = {
+//             {1, 0}
+//         };
 
-        auto subset_left = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
-                                                 mesh[mesh_id_t::cells][level])
-                               .on(level);
+//         auto subset_left = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
+//                                                  mesh[mesh_id_t::cells][level])
+//                                .on(level);
 
-        subset_left(
-            [&](const auto& i, const auto& index)
-            {
-                auto j          = index[0];
-                const double dx = samurai::cell_length(level);
+//         subset_left(
+//             [&](const auto& i, const auto& index)
+//             {
+//                 auto j          = index[0];
+//                 const double dx = samurai::cell_length(level);
 
-                unp1(level, i, j) = unp1(level, i, j)
-                                  - dt / dx
-                                        * (samurai::upwind_op<dim, interval_t>(level, i, j).left_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j).left_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j + 1).left_flux(a, u));
-            });
+//                 unp1(level, i, j) = unp1(level, i, j)
+//                                   - dt / dx
+//                                         * (samurai::upwind_op<dim, interval_t>(level, i, j).left_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j).left_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j + 1).left_flux(a, u));
+//             });
 
-        stencil = {
-            {0, -1}
-        };
+//         stencil = {
+//             {0, -1}
+//         };
 
-        auto subset_up = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil), mesh[mesh_id_t::cells][level])
-                             .on(level);
+//         auto subset_up = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
+//         mesh[mesh_id_t::cells][level])
+//                              .on(level);
 
-        subset_up(
-            [&](const auto& i, const auto& index)
-            {
-                auto j          = index[0];
-                const double dx = samurai::cell_length(level);
+//         subset_up(
+//             [&](const auto& i, const auto& index)
+//             {
+//                 auto j          = index[0];
+//                 const double dx = samurai::cell_length(level);
 
-                unp1(level, i, j) = unp1(level, i, j)
-                                  + dt / dx
-                                        * (samurai::upwind_op<dim, interval_t>(level, i, j).up_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j + 1).up_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j + 1).up_flux(a, u));
-            });
+//                 unp1(level, i, j) = unp1(level, i, j)
+//                                   + dt / dx
+//                                         * (samurai::upwind_op<dim, interval_t>(level, i, j).up_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j + 1).up_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j + 1).up_flux(a, u));
+//             });
 
-        stencil = {
-            {0, 1}
-        };
+//         stencil = {
+//             {0, 1}
+//         };
 
-        auto subset_down = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
-                                                 mesh[mesh_id_t::cells][level])
-                               .on(level);
+//         auto subset_down = samurai::intersection(samurai::translate(mesh[mesh_id_t::cells][level + 1], stencil),
+//                                                  mesh[mesh_id_t::cells][level])
+//                                .on(level);
 
-        subset_down(
-            [&](const auto& i, const auto& index)
-            {
-                auto j          = index[0];
-                const double dx = samurai::cell_length(level);
+//         subset_down(
+//             [&](const auto& i, const auto& index)
+//             {
+//                 auto j          = index[0];
+//                 const double dx = samurai::cell_length(level);
 
-                unp1(level, i, j) = unp1(level, i, j)
-                                  - dt / dx
-                                        * (samurai::upwind_op<dim, interval_t>(level, i, j).down_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j).down_flux(a, u)
-                                           - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j).down_flux(a, u));
-            });
-    }
-}
+//                 unp1(level, i, j) = unp1(level, i, j)
+//                                   - dt / dx
+//                                         * (samurai::upwind_op<dim, interval_t>(level, i, j).down_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i, 2 * j).down_flux(a, u)
+//                                            - .5 * samurai::upwind_op<dim, interval_t>(level + 1, 2 * i + 1, 2 * j).down_flux(a, u));
+//             });
+//     }
+// }
 
 template <class Field>
 void save(const fs::path& path, const std::string& filename, const Field& u, const std::string& suffix = "")
@@ -235,7 +236,7 @@ int main(int argc, char* argv[])
 
     auto MRadaptation = samurai::make_MRAdapt(u);
     MRadaptation(mr_epsilon, mr_regularity);
-    save(path, filename, u, "_init");
+    // save(path, filename, u, "_init");
 
     std::size_t nsave = 1;
     std::size_t nt    = 0;
@@ -256,18 +257,18 @@ int main(int argc, char* argv[])
         samurai::update_ghost_mr(u);
         unp1.resize();
         unp1 = u - dt * samurai::upwind(a, u);
-        if (correction)
-        {
-            flux_correction(dt, a, u, unp1);
-        }
+        // if (correction)
+        // {
+        //     flux_correction(dt, a, u, unp1);
+        // }
 
         std::swap(u.array(), unp1.array());
 
-        if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)
-        {
-            const std::string suffix = (nfiles != 1) ? fmt::format("_ite_{}", nsave++) : "";
-            save(path, filename, u, suffix);
-        }
+        // if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)
+        // {
+        //     const std::string suffix = (nfiles != 1) ? fmt::format("_ite_{}", nsave++) : "";
+        //     save(path, filename, u, suffix);
+        // }
     }
     samurai::finalize();
     return 0;

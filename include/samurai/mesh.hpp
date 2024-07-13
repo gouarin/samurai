@@ -100,10 +100,10 @@ namespace samurai
 
         void swap(Mesh_base& mesh) noexcept;
 
-        template <typename... T>
-        const interval_t& get_interval(std::size_t level, const interval_t& interval, T... index) const;
-        template <class E>
-        const interval_t& get_interval(std::size_t level, const interval_t& interval, const xt::xexpression<E>& index) const;
+        template <class get_interval_t, typename... T>
+        const interval_t& get_interval(std::size_t level, const get_interval_t& interval, T... index) const;
+        template <class get_interval_t, class E>
+        const interval_t& get_interval(std::size_t level, const get_interval_t& interval, const xt::xexpression<E>& index) const;
         template <class E>
         const interval_t& get_interval(std::size_t level, const xt::xexpression<E>& coord) const;
 
@@ -174,11 +174,11 @@ namespace samurai
             {
                 ar& m_cells[id];
             }
-            ar& m_domain;
-            ar& m_subdomain;
-            ar& m_union;
-            ar& m_min_level;
-            ar& m_min_level;
+            ar & m_domain;
+            ar & m_subdomain;
+            ar & m_union;
+            ar & m_min_level;
+            ar & m_min_level;
         }
 #endif
     };
@@ -344,16 +344,17 @@ namespace samurai
     }
 
     template <class D, class Config>
-    template <typename... T>
-    inline auto Mesh_base<D, Config>::get_interval(std::size_t level, const interval_t& interval, T... index) const -> const interval_t&
+    template <class get_interval_t, typename... T>
+    inline auto Mesh_base<D, Config>::get_interval(std::size_t level, const get_interval_t& interval, T... index) const -> const interval_t&
     {
         return m_cells[mesh_id_t::reference].get_interval(level, interval, index...);
     }
 
     template <class D, class Config>
-    template <class E>
-    inline auto Mesh_base<D, Config>::get_interval(std::size_t level, const interval_t& interval, const xt::xexpression<E>& index) const
-        -> const interval_t&
+    template <class get_interval_t, class E>
+    inline auto Mesh_base<D, Config>::get_interval(std::size_t level,
+                                                   const get_interval_t& interval,
+                                                   const xt::xexpression<E>& index) const -> const interval_t&
     {
         return m_cells[mesh_id_t::reference].get_interval(level, interval, index);
     }

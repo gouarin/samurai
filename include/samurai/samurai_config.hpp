@@ -7,8 +7,10 @@ namespace samurai
 {
     static constexpr bool disable_color = true;
 
-    template <class TValue, class TIndex>
+    template <class TValue, class TIndex, class access_tag>
     struct Interval;
+
+    class contiguous_tag;
 
     namespace default_config
     {
@@ -19,6 +21,6 @@ namespace samurai
 
         using index_t    = signed long long int;
         using value_t    = int;
-        using interval_t = Interval<value_t, index_t>;
+        using interval_t = Interval<value_t, index_t, contiguous_tag>;
     }
 }

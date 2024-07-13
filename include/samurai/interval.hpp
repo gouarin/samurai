@@ -16,6 +16,24 @@
 namespace samurai
 {
 
+    class contiguous_tag
+    {
+    };
+
+    class strided_tag
+    {
+    };
+
+    template <class access_t>
+    struct is_contiguous : std::false_type
+    {
+    };
+
+    template <>
+    struct is_contiguous<contiguous_tag> : std::true_type
+    {
+    };
+
     /////////////////////////
     // Interval definition //
     /////////////////////////
@@ -47,7 +65,7 @@ namespace samurai
      * @tparam TValue  The coordinate type (must be signed).
      * @tparam TIndex  The index type (must be signed).
      */
-    template <class TValue, class TIndex = default_config::index_t>
+    template <class TValue, class TIndex = default_config::index_t, class access = contiguous_tag>
     struct Interval
     {
         static_assert(std::is_signed<TValue>::value, "Coordinate type must be signed");
@@ -56,6 +74,7 @@ namespace samurai
         using value_t       = TValue;
         using index_t       = TIndex;
         using coord_index_t = TValue;
+        using access_t      = access;
 
         value_t start = 0; ///< Interval start.
         value_t end   = 0; ///< Interval end + 1.
@@ -70,8 +89,8 @@ namespace samurai
         std::size_t size() const;
         bool is_valid() const;
 
-        Interval even_elements() const;
-        Interval odd_elements() const;
+        auto even_elements() const;
+        auto odd_elements() const;
 
         Interval& operator*=(value_t i);
         Interval& operator/=(value_t i);
@@ -86,20 +105,23 @@ namespace samurai
         template <class Archive>
         void serialize(Archive& ar, const unsigned int)
         {
-            ar& start;
-            ar& end;
-            ar& step;
-            ar& index;
+            ar & start;
+            ar & end;
+            ar & step;
+            ar & index;
         }
 #endif
     };
+
+    template <class interval_t>
+    using dynamic_interval_t = Interval<typename interval_t::value_t, typename interval_t::index_t, strided_tag>;
 
     /////////////////////////////
     // Interval implementation //
     /////////////////////////////
 
-    template <class TValue, class TIndex>
-    inline Interval<TValue, TIndex>::Interval(value_t start_, value_t end_, index_t index_)
+    template <class TValue, class TIndex, class access_tag>
+    inline Interval<TValue, TIndex, access_tag>::Interval(value_t start_, value_t end_, index_t index_)
         : start{start_}
         , end{end_}
         , index{index_}
@@ -109,8 +131,8 @@ namespace samurai
     /**
      * Returns true if the given coordinate lies within the interval.
      */
-    template <class TValue, class TIndex>
-    inline bool Interval<TValue, TIndex>::contains(value_t x) const
+    template <class TValue, class TIndex, class access_tag>
+    inline bool Interval<TValue, TIndex, access_tag>::contains(value_t x) const
     {
         return (x >= start && x < end);
     }
@@ -118,8 +140,8 @@ namespace samurai
     /**
      * Returns the size (number of discrete coordinates) of the interval.
      */
-    template <class TValue, class TIndex>
-    inline std::size_t Interval<TValue, TIndex>::size() const
+    template <class TValue, class TIndex, class access_tag>
+    inline std::size_t Interval<TValue, TIndex, access_tag>::size() const
     {
         return static_cast<std::size_t>(end - start);
     }
@@ -127,8 +149,8 @@ namespace samurai
     /**
      * Returns if the interval has a valid state (i.e. not empty).
      */
-    template <class TValue, class TIndex>
-    inline bool Interval<TValue, TIndex>::is_valid() const
+    template <class TValue, class TIndex, class access_tag>
+    inline bool Interval<TValue, TIndex, access_tag>::is_valid() const
     {
         return (start < end);
     }
@@ -138,10 +160,10 @@ namespace samurai
      *
      * @warning the result could be an invalid interval.
      */
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::even_elements() const -> Interval
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::even_elements() const
     {
-        Interval<value_t, index_t> out{*this};
+        Interval<value_t, index_t, strided_tag> out{start, end, index};
 
         out.start += (out.start & 1) ? 1 : 0;
         out.end -= (out.end & 1) ? 0 : 1;
@@ -154,10 +176,10 @@ namespace samurai
      *
      * @warning the result could be an invalid interval.
      */
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::odd_elements() const -> Interval
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::odd_elements() const
     {
-        Interval<value_t, index_t> out{*this};
+        Interval<value_t, index_t, strided_tag> out{start, end, index};
 
         out.start += (out.start & 1) ? 0 : 1;
         out.end -= (out.end & 1) ? 1 : 0;
@@ -165,8 +187,8 @@ namespace samurai
         return out;
     }
 
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::operator*=(value_t i) -> Interval&
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::operator*=(value_t i) -> Interval&
     {
         start *= i;
         end *= i;
@@ -174,8 +196,8 @@ namespace samurai
         return *this;
     }
 
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::operator/=(value_t i) -> Interval&
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::operator/=(value_t i) -> Interval&
     {
         start = static_cast<value_t>(std::floor(start / static_cast<double>(i)));
         end   = static_cast<value_t>(std::floor(end / static_cast<double>(i)));
@@ -214,8 +236,8 @@ namespace samurai
      * Before that, the result on a negative integer is implementation-defined but compilers seem to be
      * consistent with the C++20 norm.
      */
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::operator>>=(std::size_t i) -> Interval&
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::operator>>=(std::size_t i) -> Interval&
     {
         start >>= i;
         end  = ((end - 1) >> i) + 1;
@@ -239,8 +261,8 @@ namespace samurai
      * Before that, the result on a negative integer is undefined but compilers seem to be
      * consistent with the C++20 norm.
      */
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::operator<<=(std::size_t i) -> Interval&
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::operator<<=(std::size_t i) -> Interval&
     {
         start <<= i;
         end <<= i;
@@ -248,16 +270,16 @@ namespace samurai
         return *this;
     }
 
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::operator+=(value_t i) -> Interval&
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::operator+=(value_t i) -> Interval&
     {
         start += i;
         end += i;
         return *this;
     }
 
-    template <class TValue, class TIndex>
-    inline auto Interval<TValue, TIndex>::operator-=(value_t i) -> Interval&
+    template <class TValue, class TIndex, class access_tag>
+    inline auto Interval<TValue, TIndex, access_tag>::operator-=(value_t i) -> Interval&
     {
         start -= i;
         end -= i;
@@ -267,114 +289,114 @@ namespace samurai
     /**
      * Display of an interval.
      */
-    template <class value_t, class index_t>
-    inline std::ostream& operator<<(std::ostream& out, const Interval<value_t, index_t>& interval)
+    template <class value_t, class index_t, class access_t>
+    inline std::ostream& operator<<(std::ostream& out, const Interval<value_t, index_t, access_t>& interval)
     {
         out << "[" << interval.start << "," << interval.end << "[@" << interval.index << ":" << interval.step;
         return out;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator*(value_t i, const Interval<value_t, index_t>& interval)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, strided_tag> operator*(value_t i, const Interval<value_t, index_t, access_t>& interval)
     {
-        auto that{interval};
+        Interval<value_t, index_t, strided_tag> that{interval.start, interval.end, interval.index};
         that *= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator*(const Interval<value_t, index_t>& interval, value_t i)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, strided_tag> operator*(const Interval<value_t, index_t, access_t>& interval, value_t i)
     {
-        auto that{interval};
+        Interval<value_t, index_t, strided_tag> that{interval.start, interval.end, interval.index};
         that *= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator>>(const Interval<value_t, index_t>& interval, std::size_t i)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator>>(const Interval<value_t, index_t, access_t>& interval, std::size_t i)
     {
         auto that{interval};
         that >>= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator<<(const Interval<value_t, index_t>& interval, std::size_t i)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator<<(const Interval<value_t, index_t, access_t>& interval, std::size_t i)
     {
         auto that{interval};
         that <<= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator/(value_t i, const Interval<value_t, index_t>& interval)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator/(value_t i, const Interval<value_t, index_t, access_t>& interval)
     {
         auto that{interval};
         that /= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator/(const Interval<value_t, index_t>& interval, value_t i)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator/(const Interval<value_t, index_t, access_t>& interval, value_t i)
     {
         auto that{interval};
         that /= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator+(value_t i, const Interval<value_t, index_t>& interval)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator+(value_t i, const Interval<value_t, index_t, access_t>& interval)
     {
         auto that{interval};
         that += i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator+(const Interval<value_t, index_t>& interval, value_t i)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator+(const Interval<value_t, index_t, access_t>& interval, value_t i)
     {
         auto that{interval};
         that += i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator-(value_t i, const Interval<value_t, index_t>& interval)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator-(value_t i, const Interval<value_t, index_t, access_t>& interval)
     {
         auto that{interval};
         that -= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline Interval<value_t, index_t> operator-(const Interval<value_t, index_t>& interval, value_t i)
+    template <class value_t, class index_t, class access_t>
+    inline Interval<value_t, index_t, access_t> operator-(const Interval<value_t, index_t, access_t>& interval, value_t i)
     {
         auto that{interval};
         that -= i;
         return that;
     }
 
-    template <class value_t, class index_t>
-    inline bool operator==(const Interval<value_t, index_t>& i1, const Interval<value_t, index_t>& i2)
+    template <class value_t, class index_t, class access_t>
+    inline bool operator==(const Interval<value_t, index_t, access_t>& i1, const Interval<value_t, index_t, access_t>& i2)
     {
         return !(i1.start != i2.start || i1.end != i2.end || i1.step != i2.step || i1.index != i2.index);
     }
 
-    template <class value_t, class index_t>
-    inline bool operator!=(const Interval<value_t, index_t>& i1, const Interval<value_t, index_t>& i2)
+    template <class value_t, class index_t, class access_t>
+    inline bool operator!=(const Interval<value_t, index_t, access_t>& i1, const Interval<value_t, index_t, access_t>& i2)
     {
         return !(i1 == i2);
     }
 
-    template <class value_t, class index_t>
-    inline bool operator<(const Interval<value_t, index_t>& i1, const Interval<value_t, index_t>& i2)
+    template <class value_t, class index_t, class access_t>
+    inline bool operator<(const Interval<value_t, index_t, access_t>& i1, const Interval<value_t, index_t, access_t>& i2)
     {
         return i1.start < i2.start;
     }
 } // namespace samurai
 
-template <class TValue, class TIndex>
-struct fmt::formatter<samurai::Interval<TValue, TIndex>>
+template <class TValue, class TIndex, class access_tag>
+struct fmt::formatter<samurai::Interval<TValue, TIndex, access_tag>>
 {
     constexpr auto parse(const format_parse_context& ctx)
     {
@@ -382,7 +404,7 @@ struct fmt::formatter<samurai::Interval<TValue, TIndex>>
     }
 
     template <typename FormatContext>
-    auto format(const samurai::Interval<TValue, TIndex>& interval, FormatContext& ctx)
+    auto format(const samurai::Interval<TValue, TIndex, access_tag>& interval, FormatContext& ctx)
     {
         return fmt::format_to(ctx.out(), "[{}, {}[@{}:{}", interval.start, interval.end, interval.index, interval.step);
     }

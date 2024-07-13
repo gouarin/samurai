@@ -8,11 +8,7 @@
 #include <tuple>
 #include <type_traits>
 
-namespace samurai
-{
-    template <class value_t, class index_t>
-    struct Interval;
-}
+#include "samurai_config.hpp"
 
 template <class T>
 inline void hash_combine(std::size_t& seed, const T& v)

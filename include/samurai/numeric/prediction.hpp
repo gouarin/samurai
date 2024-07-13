@@ -514,7 +514,8 @@ namespace samurai
                                                           std::integral_constant<std::size_t, order>,
                                                           std::integral_constant<bool, true>) const
     {
-        auto ii = i << 1;
+        auto iii = i << 1;
+        dynamic_interval_t<TInterval> ii{iii.start, iii.end};
         ii.step = 2;
 
         auto jj = j << 1;

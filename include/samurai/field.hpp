@@ -114,37 +114,52 @@ namespace samurai
                 return m_storage.data()[i];
             }
 
-            template <class... T>
-            inline auto operator()(const std::size_t level, const interval_t& interval, const T... index)
+            template <class get_interval_t, class... T>
+            inline auto operator()(const std::size_t level, const get_interval_t& interval, const T... index)
             {
                 auto interval_tmp = this->derived_cast().get_interval("READ OR WRITE", level, interval, index...);
-                return view(m_storage, {interval_tmp.index + interval.start, interval_tmp.index + interval.end, interval.step});
+                if constexpr (is_contiguous<typename get_interval_t::access_t>::value)
+                {
+                    return view(m_storage, sam_range(interval_tmp.index + interval.start, interval_tmp.index + interval.end));
+                }
+                else
+                {
+                    return view(m_storage, sam_range(interval_tmp.index + interval.start, interval_tmp.index + interval.end, interval.step));
+                }
             }
 
-            template <class... T>
-            inline auto operator()(const std::size_t level, const interval_t& interval, const T... index) const
+            template <class get_interval_t, class... T>
+            inline auto operator()(const std::size_t level, const get_interval_t& interval, const T... index) const
             {
                 auto interval_tmp = this->derived_cast().get_interval("READ", level, interval, index...);
-                auto data = view(m_storage, {interval_tmp.index + interval.start, interval_tmp.index + interval.end, interval.step});
-
-#ifdef SAMURAI_CHECK_NAN
-                if (xt::any(xt::isnan(data)))
+                if constexpr (is_contiguous<typename get_interval_t::access_t>::value)
                 {
-                    for (decltype(interval_tmp.index) i = interval_tmp.index + interval.start; i < interval_tmp.index + interval.end;
-                         i += interval.step)
-                    {
-                        if (std::isnan(this->derived_cast().m_data[static_cast<std::size_t>(i)]))
-                        {
-                            // std::cerr << "READ NaN at level " << level << ", in interval " << interval << std::endl;
-                            auto ii   = i - interval_tmp.index;
-                            auto cell = this->derived_cast().mesh().get_cell(level, static_cast<int>(ii), index...);
-                            std::cerr << "READ NaN in " << cell << std::endl;
-                            break;
-                        }
-                    }
+                    return view(m_storage, sam_range(interval_tmp.index + interval.start, interval_tmp.index + interval.end));
                 }
-#endif
-                return data;
+                else
+                {
+                    return view(m_storage, sam_range(interval_tmp.index + interval.start, interval_tmp.index + interval.end, interval.step));
+                }
+
+                // #ifdef SAMURAI_CHECK_NAN
+                //                 if (xt::any(xt::isnan(data)))
+                //                 {
+                //                     for (decltype(interval_tmp.index) i = interval_tmp.index + interval.start; i < interval_tmp.index +
+                //                     interval.end;
+                //                          i += interval.step)
+                //                     {
+                //                         if (std::isnan(this->derived_cast().m_data[static_cast<std::size_t>(i)]))
+                //                         {
+                //                             // std::cerr << "READ NaN at level " << level << ", in interval " << interval << std::endl;
+                //                             auto ii   = i - interval_tmp.index;
+                //                             auto cell = this->derived_cast().mesh().get_cell(level, static_cast<int>(ii), index...);
+                //                             std::cerr << "READ NaN in " << cell << std::endl;
+                //                             break;
+                //                         }
+                //                     }
+                //                 }
+                // #endif
+                //                 return data;
             }
 
             void resize()
@@ -372,12 +387,13 @@ namespace samurai
 
       private:
 
-        template <class... T>
-        const interval_t& get_interval(std::string rw, std::size_t level, const interval_t& interval, const T... index) const;
+        template <class get_interval_t, class... T>
+        const interval_t& get_interval(std::string rw, std::size_t level, const get_interval_t& interval, const T... index) const;
 
+        template <class get_interval_t>
         const interval_t& get_interval(std::string rw,
                                        std::size_t level,
-                                       const interval_t& interval,
+                                       const get_interval_t& interval,
                                        const xt::xtensor_fixed<value_t, xt::xshape<dim - 1>>& index) const;
 
         std::string m_name;
@@ -550,10 +566,10 @@ namespace samurai
     }
 
     template <class mesh_t, class value_t, std::size_t size_, bool SOA>
-    template <class... T>
+    template <class get_interval_t, class... T>
     inline auto Field<mesh_t, value_t, size_, SOA>::get_interval(std::string rw,
                                                                  std::size_t level,
-                                                                 const interval_t& interval,
+                                                                 const get_interval_t& interval,
                                                                  const T... index) const -> const interval_t&
     {
         const interval_t& interval_tmp = this->mesh().get_interval(level, interval, index...);
@@ -585,10 +601,11 @@ namespace samurai
     }
 
     template <class mesh_t, class value_t, std::size_t size_, bool SOA>
+    template <class get_interval_t>
     inline auto
     Field<mesh_t, value_t, size_, SOA>::get_interval(std::string rw,
                                                      std::size_t level,
-                                                     const interval_t& interval,
+                                                     const get_interval_t& interval,
                                                      const xt::xtensor_fixed<value_t, xt::xshape<dim - 1>>& index) const -> const interval_t&
     {
         const interval_t& interval_tmp = this->mesh().get_interval(level, interval, index);
