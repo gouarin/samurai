@@ -8,6 +8,7 @@
 #include <xtensor/xfixed.hpp>
 
 #include "../bc.hpp"
+#include "../graduation.hpp"
 #include "../mr/operators.hpp"
 #include "../numeric/prediction.hpp"
 #include "../numeric/projection.hpp"
@@ -822,6 +823,7 @@ namespace samurai
         using interval_t                 = typename mesh_t::interval_t;
         using value_t                    = typename interval_t::value_t;
         using cl_type                    = typename Field::mesh_t::cl_type;
+        using ca_type                    = typename Field::mesh_t::ca_type;
 
         auto& mesh = field.mesh();
         cl_type cl;
@@ -867,7 +869,11 @@ namespace samurai
                               }
                           });
 
-        mesh_t new_mesh = {cl, mesh};
+        ca_type ca = {cl};
+        make_graduation(ca, mesh_t::config::graduation_width);
+        mesh_t new_mesh = {ca, mesh};
+
+        // mesh_t new_mesh = {cl, mesh};
 
 #ifdef SAMURAI_WITH_MPI
         mpi::communicator world;

@@ -39,7 +39,9 @@ namespace samurai
     }
 
     template <class Mesh, std::size_t neighbourhood_width = 1>
-    void make_graduation(Mesh& mesh, const Stencil<1 + 2 * Mesh::dim * neighbourhood_width, Mesh::dim> stencil = star_stencil<Mesh::dim>())
+    void make_graduation(Mesh& mesh,
+                         int grad_width                                                            = 1,
+                         const Stencil<1 + 2 * Mesh::dim * neighbourhood_width, Mesh::dim> stencil = star_stencil<Mesh::dim>())
     {
         static constexpr std::size_t dim = Mesh::dim;
         using cl_type                    = typename Mesh::cl_type;
@@ -60,13 +62,16 @@ namespace samurai
                 {
                     for (std::size_t is = 0; is < stencil.shape()[0]; ++is)
                     {
-                        auto s   = xt::view(stencil, is);
-                        auto set = intersection(translate(mesh[level], s), mesh[level_below]).on(level_below);
-                        set(
-                            [&](const auto& i, const auto& index)
-                            {
-                                tag(level_below, i, index) = true;
-                            });
+                        for (int ig = 0; ig < grad_width; ++ig)
+                        {
+                            auto s   = xt::view(stencil, is);
+                            auto set = intersection(translate(mesh[level], (2 * ig + 1) * s), mesh[level_below]).on(level_below);
+                            set(
+                                [&](const auto& i, const auto& index)
+                                {
+                                    tag(level_below, i, index) = true;
+                                });
+                        }
                     }
                 }
             }

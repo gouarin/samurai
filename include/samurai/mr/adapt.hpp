@@ -302,7 +302,7 @@ namespace samurai
                 auto subset = intersection(translate(mesh[mesh_id_t::cells][level], s), mesh[mesh_id_t::all_cells][level - 1], mesh.domain())
                                   .on(level);
 
-                subset.apply_op(make_graduation(m_tag));
+                subset.apply_op(make_graduation_refinement(m_tag));
             }
 
             update_tag_periodic(level, m_tag);

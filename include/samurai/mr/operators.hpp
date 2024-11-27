@@ -802,11 +802,11 @@ namespace samurai
      ****************************/
 
     template <std::size_t dim, class TInterval>
-    class make_graduation_op : public field_operator_base<dim, TInterval>
+    class make_graduation_refinement_op : public field_operator_base<dim, TInterval>
     {
       public:
 
-        INIT_OPERATOR(make_graduation_op)
+        INIT_OPERATOR(make_graduation_refinement_op)
 
         template <class T>
         inline void operator()(Dim<1>, T& tag) const
@@ -864,8 +864,8 @@ namespace samurai
     };
 
     template <class... CT>
-    inline auto make_graduation(CT&&... e)
+    inline auto make_graduation_refinement(CT&&... e)
     {
-        return make_field_operator_function<make_graduation_op>(std::forward<CT>(e)...);
+        return make_field_operator_function<make_graduation_refinement_op>(std::forward<CT>(e)...);
     }
 } // namespace samurai
