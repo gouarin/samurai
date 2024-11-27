@@ -100,6 +100,12 @@ namespace samurai
     }
 
     template <class Config>
+    inline MRMesh<Config>::MRMesh(const ca_type& ca, const self_type& ref_mesh)
+        : base_type(ca, ref_mesh)
+    {
+    }
+
+    template <class Config>
     inline MRMesh<Config>::MRMesh(const cl_type& cl, std::size_t min_level, std::size_t max_level)
         : base_type(cl, min_level, max_level)
     {
