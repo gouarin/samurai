@@ -298,9 +298,8 @@ namespace samurai
 
             for (std::size_t is = 0; is < stencil.shape(0); ++is)
             {
-                auto s = xt::view(stencil, is);
-                auto subset = intersection(translate(mesh[mesh_id_t::cells][level], s), mesh[mesh_id_t::all_cells][level - 1], mesh.domain())
-                                  .on(level);
+                auto s      = xt::view(stencil, is);
+                auto subset = intersection(translate(mesh[mesh_id_t::cells][level], s), mesh[mesh_id_t::all_cells][level - 1]).on(level);
 
                 subset.apply_op(make_graduation_refinement(m_tag));
             }
