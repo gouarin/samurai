@@ -168,13 +168,13 @@ jobs:
                       -DBUILD_DEMOS=ON \
                       -DBUILD_TESTS=ON
 
+            - name: Setup tmate session
+              uses: mxschmitt/action-tmate@v3
+
             - name: Build
               shell: bash -l {0}
               run: |
                   cmake --build build --target all --parallel 3
-
-            - name: Setup tmate session
-              uses: mxschmitt/action-tmate@v3
 
             - name: Test with googletest
               shell: bash -l {0}
