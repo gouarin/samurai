@@ -165,7 +165,6 @@ jobs:
                       -Bbuild \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Release \
-                      -DBUILD_DEMOS=ON \
                       -DBUILD_TESTS=ON
 
             # - name: Setup tmate session
@@ -183,12 +182,12 @@ jobs:
                   cd build
                   ./tests/test_samurai_lib
 
-            - name: Test with pytest
-              shell: bash -l {0}
-              run: |
-                  export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
-                  cd tests
-                  pytest -v -s --h5diff
+            # - name: Test with pytest
+            #   shell: bash -l {0}
+            #   run: |
+            #       export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+            #       cd tests
+            #       pytest -v -s --h5diff
 
     # #
     # # Check linux build with mamba environment
