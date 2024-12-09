@@ -168,8 +168,8 @@ jobs:
                       -DBUILD_DEMOS=ON \
                       -DBUILD_TESTS=ON
 
-            - name: Setup tmate session
-              uses: mxschmitt/action-tmate@v3
+            # - name: Setup tmate session
+            #   uses: mxschmitt/action-tmate@v3
 
             - name: Build
               shell: bash -l {0}
