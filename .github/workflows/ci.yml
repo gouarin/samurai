@@ -119,9 +119,6 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
-            - name: Setup tmate session
-              uses: mxschmitt/action-tmate@v3
-
             - name: Cache
               uses: actions/cache@v4
               with:
@@ -175,6 +172,9 @@ jobs:
               shell: bash -l {0}
               run: |
                   cmake --build build --target all --parallel 3
+
+            - name: Setup tmate session
+              uses: mxschmitt/action-tmate@v3
 
             - name: Test with googletest
               shell: bash -l {0}
