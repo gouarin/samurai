@@ -3,14 +3,11 @@
 
 #pragma once
 
-#include "../algorithm/graduation.hpp"
 #include "../algorithm/update.hpp"
 #include "../field.hpp"
-#include "../hdf5.hpp"
-#include "../static_algorithm.hpp"
 #include "../timers.hpp"
 #include "criteria.hpp"
-#include <type_traits>
+#include "operators.hpp"
 
 namespace samurai
 {
