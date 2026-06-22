@@ -3,34 +3,35 @@
 #include "fv/flux_based_scheme_assembly.hpp"
 #include "fv/operator_sum_assembly.hpp"
 #include "utils.hpp"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <iostream>
 #include <petsc.h>
 
 namespace samurai
 {
     namespace petsc
     {
+        /**
+         * Solver for a set of independent local non-linear systems, one per cell
+         * (cell-based scheme with stencil size 1).
+         *
+         * Each local system scheme(x) = rhs is solved with a hand-rolled dense Newton
+         * method. The residual scheme(x) and the Jacobian d(scheme)/dx are evaluated
+         * through the scheme callbacks ('local_scheme_function' and
+         * 'local_jacobian_function'), and the n_comp x n_comp linear system of each
+         * Newton iteration is solved directly (Gaussian elimination, partial pivoting).
+         *
+         * Note: a previous implementation used one PETSc SNES per cell. Because PETSc
+         * re-queries its options database on every SNESSolve, that approach spent most
+         * of its time in PetscOptionsFindPair when sweeping over the (many, tiny) local
+         * systems. The dense Newton avoids that machinery entirely while producing the
+         * same solution.
+         */
         template <class Scheme>
         class NonLinearLocalSolvers
         {
-            // clang-format off
-
-#define SAMURAI_STRINGIFY(x) #x
-#define SAMURAI_VERSIONIFY(M, m, v) SAMURAI_STRINGIFY(M.m.v)
-
-
-#ifdef SAMURAI_WITH_OPENMP
-    #if !PetscDefined(HAVE_THREADSAFETY)
-        #pragma message("To enable OpenMP for independent non-linear systems, PETSc must be configured with option --with-threadsafety.")
-    #endif
-    #if PETSC_VERSION_LT(3, 20, 6)
-        #pragma message("To enable OpenMP for independent non-linear systems, upgrade PETSc to version 3.20.6 or upper (current version: " SAMURAI_VERSIONIFY(PETSC_VERSION_MAJOR, PETSC_VERSION_MINOR, PETSC_VERSION_SUBMINOR) ")")
-    #endif
-    #if PetscDefined(HAVE_THREADSAFETY) && PETSC_VERSION_GE(3, 20, 6)
-        #define ENABLE_PARALLEL_NONLINEAR_SOLVES
-    #endif
-#endif
-            // clang-format on
-
             using scheme_t      = Scheme;
             using cfg_t         = typename scheme_t::cfg_t;
             using field_t       = typename scheme_t::field_t;
@@ -38,7 +39,7 @@ namespace samurai
             using field_value_t = typename field_t::value_type;
             using cell_t        = Cell<mesh_t::dim, typename mesh_t::interval_t>;
 
-            static constexpr PetscInt n_comp = field_t::n_comp;
+            static constexpr std::size_t n_comp = field_t::n_comp;
 
           protected:
 
@@ -46,20 +47,25 @@ namespace samurai
             scheme_t m_scheme;
             bool m_is_set_up = false;
 
-            std::vector<SNES> m_snes;
-            std::vector<JacobianMatrix<cfg_t>> m_J_coeffs;
-            std::vector<Mat> m_J;
+            // One worker per thread for the scheme value scheme(x) and the Jacobian d(scheme)/dx.
             std::vector<SchemeValue<cfg_t>> m_f_scheme_value;
-            std::vector<Vec> m_r;
-            std::vector<Vec> m_x;
-            std::vector<Vec> m_b;
+            std::vector<JacobianMatrix<cfg_t>> m_J_coeffs;
 
             std::size_t m_n_threads = 1;
 
           public:
 
-            // User callback to configure the solver
-            std::function<void(SNES&, KSP&, PC&)> configure = nullptr;
+            // Newton stopping criteria (same defaults as the PETSc SNES that this solver replaces).
+            // Convergence is reached when the residual is small,
+            //     ||scheme(x) - rhs|| <= newton_atol + newton_rtol * ||initial residual||,
+            // or when the Newton step becomes negligible,
+            //     ||dx|| <= newton_stol * ||x||.
+            // The step criterion is what lets cells already at equilibrium (tiny initial
+            // residual, hence an unreachable relative tolerance) converge in one iteration.
+            field_value_t newton_rtol         = 1e-8;
+            field_value_t newton_atol         = 1e-50;
+            field_value_t newton_stol         = 1e-8;
+            std::size_t newton_max_iterations = 50;
 
             explicit NonLinearLocalSolvers(const scheme_t& scheme)
                 : m_scheme(scheme)
@@ -79,52 +85,14 @@ namespace samurai
                     exit(EXIT_FAILURE);
                 }
 
-#ifdef ENABLE_PARALLEL_NONLINEAR_SOLVES
+#ifdef SAMURAI_WITH_OPENMP
                 m_n_threads = static_cast<std::size_t>(omp_get_max_threads());
 #else
                 m_n_threads = 1;
 #endif
-                m_snes.resize(m_n_threads);
-                m_J_coeffs.resize(m_n_threads);
-                m_J.resize(m_n_threads);
                 m_f_scheme_value.resize(m_n_threads);
-                m_r.resize(m_n_threads);
-                m_x.resize(m_n_threads);
-                m_b.resize(m_n_threads);
-
-                allocate_petsc_objects();
+                m_J_coeffs.resize(m_n_threads);
             }
-
-            ~NonLinearLocalSolvers()
-            {
-                destroy_petsc_objects();
-            }
-
-            void allocate_petsc_objects()
-            {
-                for (std::size_t thread_num = 0; thread_num < m_n_threads; ++thread_num)
-                {
-                    SNESCreate(PETSC_COMM_SELF, &m_snes[thread_num]);
-                    MatCreateSeqDense(PETSC_COMM_SELF, n_comp, n_comp, nullptr, &m_J[thread_num]);
-                    VecCreateSeq(PETSC_COMM_SELF, n_comp, &m_r[thread_num]);
-                    VecCreateSeq(PETSC_COMM_SELF, n_comp, &m_x[thread_num]);
-                    VecCreateSeq(PETSC_COMM_SELF, n_comp, &m_b[thread_num]);
-                }
-            }
-
-            void destroy_petsc_objects()
-            {
-                for (std::size_t thread_num = 0; thread_num < m_n_threads; ++thread_num)
-                {
-                    MatDestroy(&m_J[thread_num]);
-                    VecDestroy(&m_r[thread_num]);
-                    VecDestroy(&m_x[thread_num]);
-                    VecDestroy(&m_b[thread_num]);
-                    SNESDestroy(&m_snes[thread_num]);
-                }
-            }
-
-          public:
 
             NonLinearLocalSolvers& operator=(const NonLinearLocalSolvers& other)
             {
@@ -180,30 +148,11 @@ namespace samurai
                     exit(EXIT_FAILURE);
                 }
 
-                // Configure the solvers
-                for (std::size_t thread_num = 0; thread_num < m_n_threads; ++thread_num)
-                {
-                    KSP ksp;
-                    PC pc;
-                    SNESGetKSP(m_snes[thread_num], &ksp);
-                    KSPGetPC(ksp, &pc);
-                    // Default configuration: LU
-                    KSPSetType(ksp, KSPPREONLY);
-                    PCSetType(pc, PCLU);
-                    if (configure)
-                    {
-                        configure(m_snes[thread_num], ksp, pc);
-                    }
-                    SNESSetFromOptions(m_snes[thread_num]);
-                }
-
                 m_is_set_up = true;
             }
 
             void reset()
             {
-                destroy_petsc_objects();
-                allocate_petsc_objects();
                 m_is_set_up = false;
             }
 
@@ -211,18 +160,6 @@ namespace samurai
             {
                 m_scheme = s;
             }
-
-          private:
-
-            struct CellContextForPETSc
-            {
-                scheme_t* scheme;
-                cell_t* cell;
-                JacobianMatrix<cfg_t>* jac_coeffs;
-                SchemeValue<cfg_t>* f_scheme_value;
-            };
-
-          public:
 
             void solve(field_t& rhs)
             {
@@ -233,7 +170,7 @@ namespace samurai
 
                 times::timers.start("non-linear local solves");
 
-#ifdef ENABLE_PARALLEL_NONLINEAR_SOLVES
+#ifdef SAMURAI_WITH_OPENMP
                 static constexpr Run run_type = Run::Parallel;
 #else
                 static constexpr Run run_type = Run::Sequential;
@@ -241,131 +178,151 @@ namespace samurai
                 for_each_cell<run_type>(unknown().mesh(),
                                         [&](auto& cell)
                                         {
-#ifdef ENABLE_PARALLEL_NONLINEAR_SOLVES
+#ifdef SAMURAI_WITH_OPENMP
                                             std::size_t thread_num = static_cast<std::size_t>(omp_get_thread_num());
 #else
                                             std::size_t thread_num = 0;
 #endif
-                                            SNES& snes           = m_snes[thread_num];
-                                            auto& J_coeffs       = m_J_coeffs[thread_num];
-                                            Mat& J               = m_J[thread_num];
-                                            Vec& r               = m_r[thread_num];
-                                            auto& f_scheme_value = m_f_scheme_value[thread_num];
-                                            Vec& x               = m_x[thread_num];
-                                            Vec& b               = m_b[thread_num];
-
-                                            copy(unknown(), cell, x); // local initial guess
-                                            copy(rhs, cell, b);       // local right-hand side
-
-                                            CellContextForPETSc ctx{&m_scheme, &cell, &J_coeffs, &f_scheme_value};
-                                            SNESSetFunction(snes, r, PETSC_nonlinear_function, &ctx);
-                                            SNESSetJacobian(snes, J, J, PETSC_jacobian_function, &ctx);
-
-                                            solve_system(snes, b, x); // solve the local non-linear system
-
-                                            copy(x, unknown(), cell);
+                                            newton_local_solve(cell, rhs, thread_num);
                                         });
 
                 times::timers.stop("non-linear local solves");
             }
 
-          private:
-
-            static PetscErrorCode PETSC_nonlinear_function(SNES, Vec x, Vec f, void* ctx)
-            {
-                auto petsc_ctx       = reinterpret_cast<CellContextForPETSc*>(ctx);
-                auto& scheme         = *petsc_ctx->scheme;
-                auto& cell           = *petsc_ctx->cell;
-                auto& f_scheme_value = *petsc_ctx->f_scheme_value; // worker object for storing the computed scheme value
-
-                // Wrap a LocalField structure around the data of the Petsc vector x
-                const PetscScalar* x_data;
-                VecGetArrayRead(x, &x_data);
-                LocalField<field_t> x_field(cell, x_data);
-
-                // Apply explicit scheme function to compute f = scheme(x)
-                scheme.scheme_definition().local_scheme_function(f_scheme_value, cell, x_field);
-                // Copy the computed f_scheme_value into the Petsc vector f
-                copy(f_scheme_value, f);
-
-                VecRestoreArrayRead(x, &x_data);
-                return PETSC_SUCCESS;
-            }
-
-            static PetscErrorCode PETSC_jacobian_function(SNES, Vec x, Mat jac, Mat B, void* ctx)
-            {
-                // Assembly of the Jacobian matrix.
-                // In this case, jac = B, but Petsc recommends we assemble B for more general cases.
-
-                auto petsc_ctx   = reinterpret_cast<CellContextForPETSc*>(ctx);
-                auto& scheme     = *petsc_ctx->scheme;
-                auto& cell       = *petsc_ctx->cell;
-                auto& jac_coeffs = *petsc_ctx->jac_coeffs; // worker for storing the Jacobian coefficients
-
-                // Wrap a LocalField structure around the data of the Petsc vector x
-                const PetscScalar* x_data;
-                VecGetArrayRead(x, &x_data);
-                LocalField<field_t> x_field(cell, x_data);
-
-                scheme.scheme_definition().local_jacobian_function(jac_coeffs, cell, x_field);
-
-                VecRestoreArrayRead(x, &x_data);
-
-                // Copy the Jacobian coefficients into the PETSc matrix (careful: the dense matrices are stored in column-major order)
-                PetscScalar* array;
-                MatDenseGetArray(B, &array);
-                for (int j = 0; j < n_comp; j++)
-                {
-                    for (int i = 0; i < n_comp; i++)
-                    {
-                        array[j * n_comp + i] = jac_coeffs(i, j);
-                    }
-                }
-                MatDenseRestoreArray(B, &array);
-
-                MatAssemblyBegin(B, MAT_FINAL_ASSEMBLY);
-                MatAssemblyEnd(B, MAT_FINAL_ASSEMBLY);
-                if (jac != B)
-                {
-                    MatAssemblyBegin(jac, MAT_FINAL_ASSEMBLY);
-                    MatAssemblyEnd(jac, MAT_FINAL_ASSEMBLY);
-                }
-
-                // MatView(B, PETSC_VIEWER_STDOUT_(PETSC_COMM_SELF));
-                // std::cout << std::endl;
-                return PETSC_SUCCESS;
-            }
-
-          protected:
-
-            void solve_system(SNES snes, Vec& b, Vec& x)
-            {
-                // Solve the system
-                SNESSolve(snes, b, x);
-
-                SNESConvergedReason reason_code;
-                SNESGetConvergedReason(snes, &reason_code);
-                if (reason_code < 0)
-                {
-                    using namespace std::string_literals;
-                    const char* reason_text;
-                    SNESGetConvergedReasonString(snes, &reason_text);
-                    std::cerr << "Divergence of the non-linear solver ("s + reason_text + ")" << std::endl;
-                    // VecView(b, PETSC_VIEWER_STDOUT_(PETSC_COMM_SELF));
-                    // std::cout << std::endl;
-                    // assert(check_nan_or_inf(b));
-                    assert(false && "Divergence of the solver");
-                    exit(EXIT_FAILURE);
-                }
-                // VecView(x, PETSC_VIEWER_STDOUT_(PETSC_COMM_SELF)); std::cout << std::endl;
-            }
-
-          public:
-
             void solve(field_t& unknown, field_t& rhs)
             {
                 set_unknown(unknown);
                 solve(rhs);
+            }
+
+          private:
+
+            // Solve the local non-linear system scheme(x) = rhs(cell) by Newton's method,
+            // starting from the current value of the unknown in 'cell'.
+            void newton_local_solve(const cell_t& cell, field_t& rhs, std::size_t thread_num)
+            {
+                auto& f_value = m_f_scheme_value[thread_num]; // worker: scheme(x)
+                auto& jac     = m_J_coeffs[thread_num];       // worker: d(scheme)/dx
+
+                std::array<field_value_t, n_comp> x; // current iterate (local initial guess)
+                std::array<field_value_t, n_comp> b; // local right-hand side
+                for (std::size_t i = 0; i < n_comp; ++i)
+                {
+                    x[i] = unknown()[cell](i);
+                    b[i] = rhs[cell](i);
+                }
+
+                field_value_t norm0 = 0;
+                bool converged      = false;
+                for (std::size_t iter = 0; iter <= newton_max_iterations; ++iter)
+                {
+                    LocalField<field_t> x_field(cell, x.data());
+
+                    // residual r = scheme(x) - b
+                    m_scheme.scheme_definition().local_scheme_function(f_value, cell, x_field);
+                    std::array<field_value_t, n_comp> r;
+                    field_value_t norm = 0;
+                    for (std::size_t i = 0; i < n_comp; ++i)
+                    {
+                        r[i] = f_value(i) - b[i];
+                        norm += r[i] * r[i];
+                    }
+                    norm = std::sqrt(norm);
+                    if (iter == 0)
+                    {
+                        norm0 = norm;
+                    }
+                    if (norm <= newton_atol + newton_rtol * norm0)
+                    {
+                        converged = true;
+                        break;
+                    }
+
+                    // Jacobian J = d(scheme)/dx, then Newton update x -= J^{-1} r
+                    m_scheme.scheme_definition().local_jacobian_function(jac, cell, x_field);
+                    std::array<field_value_t, n_comp> dx;
+                    dense_solve(jac, r, dx);
+
+                    field_value_t step_norm2 = 0;
+                    field_value_t x_norm2    = 0;
+                    for (std::size_t i = 0; i < n_comp; ++i)
+                    {
+                        x[i] -= dx[i];
+                        step_norm2 += dx[i] * dx[i];
+                        x_norm2 += x[i] * x[i];
+                    }
+                    if (std::sqrt(step_norm2) <= newton_stol * std::sqrt(x_norm2))
+                    {
+                        converged = true;
+                        break;
+                    }
+                }
+
+                if (!converged)
+                {
+                    std::cerr << "Divergence of the local non-linear solver: Newton did not converge in " << newton_max_iterations
+                              << " iterations." << std::endl;
+                    assert(false && "Divergence of the local non-linear solver");
+                    exit(EXIT_FAILURE);
+                }
+
+                for (std::size_t i = 0; i < n_comp; ++i)
+                {
+                    unknown()[cell][i] = x[i];
+                }
+            }
+
+            // Solve the dense system J sol = rhs (Gaussian elimination with partial pivoting).
+            static void dense_solve(const JacobianMatrix<cfg_t>& J,
+                                    const std::array<field_value_t, n_comp>& rhs,
+                                    std::array<field_value_t, n_comp>& sol)
+            {
+                std::array<std::array<field_value_t, n_comp>, n_comp> a;
+                std::array<field_value_t, n_comp> b = rhs;
+                for (std::size_t i = 0; i < n_comp; ++i)
+                {
+                    for (std::size_t j = 0; j < n_comp; ++j)
+                    {
+                        a[i][j] = J(i, j);
+                    }
+                }
+
+                for (std::size_t k = 0; k < n_comp; ++k)
+                {
+                    std::size_t piv = k;
+                    for (std::size_t i = k + 1; i < n_comp; ++i)
+                    {
+                        if (std::abs(a[i][k]) > std::abs(a[piv][k]))
+                        {
+                            piv = i;
+                        }
+                    }
+                    if (piv != k)
+                    {
+                        std::swap(a[piv], a[k]);
+                        std::swap(b[piv], b[k]);
+                    }
+                    assert(a[k][k] != 0 && "Singular Jacobian in the local non-linear solver");
+                    for (std::size_t i = k + 1; i < n_comp; ++i)
+                    {
+                        const field_value_t factor = a[i][k] / a[k][k];
+                        for (std::size_t j = k; j < n_comp; ++j)
+                        {
+                            a[i][j] -= factor * a[k][j];
+                        }
+                        b[i] -= factor * b[k];
+                    }
+                }
+
+                for (std::size_t k = n_comp; k-- > 0;)
+                {
+                    field_value_t s = b[k];
+                    for (std::size_t j = k + 1; j < n_comp; ++j)
+                    {
+                        s -= a[k][j] * sol[j];
+                    }
+                    sol[k] = s / a[k][k];
+                }
             }
         };
 
