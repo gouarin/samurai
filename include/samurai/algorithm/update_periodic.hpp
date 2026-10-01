@@ -55,8 +55,8 @@ namespace samurai::detail
 
             const auto& domain        = mesh.domain();
             const std::size_t delta_l = domain.level() - level;
-            const auto domain_min     = domain.min_indices();
-            const auto domain_max     = domain.max_indices();
+            const auto& domain_min    = mesh.domain_min_indices();
+            const auto& domain_max    = mesh.domain_max_indices();
             const auto& own           = mesh[mesh_id_t::reference][level];
             const auto own_min        = own.min_indices();
             const auto own_max        = own.max_indices();

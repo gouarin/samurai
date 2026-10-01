@@ -173,6 +173,9 @@ namespace samurai
         const lca_type& domain() const;
         const lca_type& domain(std::size_t level) const;
         const ca_type& domain_pyramid() const;
+        const std::array<value_t, dim>& domain_min_indices() const;
+        const std::array<value_t, dim>& domain_max_indices() const;
+        auto periodic_shift(std::size_t level, std::size_t d) const;
         const lca_type& subdomain() const;
         const lca_type& subdomain(std::size_t level) const;
 
@@ -274,6 +277,13 @@ namespace samurai
 #endif
 
         ca_type m_domain;
+        // Bounds of the domain at its finest level, kept with m_domain (see
+        // update_domain_bounds): computing them scans every interval of the global
+        // domain, whose size grows with the number of ranks, and they are read at
+        // every level of every interface loop and periodic exchange.
+        std::array<value_t, dim> m_domain_min_indices{};
+        std::array<value_t, dim> m_domain_max_indices{};
+        void update_domain_bounds();
         ca_type m_subdomain;
         mesh_t m_cells;
         ca_type m_union;
@@ -382,6 +392,7 @@ namespace samurai
     {
         lca_type domain_ref(m_config.start_level(), b, m_config.approx_box_tol(), m_config.scaling_factor());
         build_pyramid(m_domain, domain_ref);
+        update_domain_bounds();
 
 #ifdef SAMURAI_WITH_MPI
         partition_mesh(m_config.start_level(), b);
@@ -426,6 +437,7 @@ namespace samurai
 
         construct_subdomain();
         m_domain = m_subdomain;
+        update_domain_bounds();
         exchange_neighbour_meshes();
         finalize_mesh(domain_builder.origin_point(), m_config.scaling_factor());
     }
@@ -451,6 +463,8 @@ namespace samurai
     template <class D, class Config>
     SAMURAI_INLINE Mesh_base<D, Config>::Mesh_base(const ca_type& ca, const self_type& ref_mesh)
         : m_domain(ref_mesh.m_domain)
+        , m_domain_min_indices(ref_mesh.m_domain_min_indices)
+        , m_domain_max_indices(ref_mesh.m_domain_max_indices)
         , m_mpi_neighbourhood(ref_mesh.m_mpi_neighbourhood)
         , m_config(ref_mesh.m_config)
     {
@@ -816,6 +830,43 @@ namespace samurai
     }
 
     template <class D, class Config>
+    SAMURAI_INLINE void Mesh_base<D, Config>::update_domain_bounds()
+    {
+        const auto& finest = m_domain[max_level()];
+        if (finest.empty())
+        {
+            m_domain_min_indices.fill(0);
+            m_domain_max_indices.fill(0);
+            return;
+        }
+        m_domain_min_indices = finest.min_indices();
+        m_domain_max_indices = finest.max_indices();
+    }
+
+    template <class D, class Config>
+    SAMURAI_INLINE auto Mesh_base<D, Config>::domain_min_indices() const -> const std::array<value_t, dim>&
+    {
+        return m_domain_min_indices;
+    }
+
+    template <class D, class Config>
+    SAMURAI_INLINE auto Mesh_base<D, Config>::domain_max_indices() const -> const std::array<value_t, dim>&
+    {
+        return m_domain_max_indices;
+    }
+
+    // Shift, at `level`, between a cell and its periodic image across direction d:
+    // the extent of the domain along d.
+    template <class D, class Config>
+    SAMURAI_INLINE auto Mesh_base<D, Config>::periodic_shift(std::size_t level, std::size_t d) const
+    {
+        xt::xtensor_fixed<value_t, xt::xshape<dim>> shift;
+        shift.fill(0);
+        shift[d] = (m_domain_max_indices[d] - m_domain_min_indices[d]) >> (max_level() - level);
+        return shift;
+    }
+
+    template <class D, class Config>
     SAMURAI_INLINE auto Mesh_base<D, Config>::subdomain() const -> const lca_type&
     {
         return m_subdomain[max_level()];
@@ -977,6 +1028,8 @@ namespace samurai
         using std::swap;
         swap(m_cells, mesh.m_cells);
         swap(m_domain, mesh.m_domain);
+        swap(m_domain_min_indices, mesh.m_domain_min_indices);
+        swap(m_domain_max_indices, mesh.m_domain_max_indices);
         swap(m_subdomain, mesh.m_subdomain);
         swap(m_mpi_neighbourhood, mesh.m_mpi_neighbourhood);
         swap(m_union, mesh.m_union);
@@ -1276,10 +1329,12 @@ namespace samurai
             }
 
             build_pyramid(m_domain, lca_type{lcl});
+            update_domain_bounds();
             return;
         }
 #endif
         m_domain = m_subdomain;
+        update_domain_bounds();
     }
 
     template <class D, class Config>
@@ -1533,7 +1588,9 @@ namespace samurai
             // The freshly exchanged subdomain replaces the cached one (this is
             // what the former update_neighbour_subdomain round used to bring).
             neighbour.mesh.m_subdomain = std::move(candidate_subdomains[neighbour_candidate_index[j]]);
-            neighbour.mesh.m_domain    = m_domain;
+            neighbour.mesh.m_domain             = m_domain;
+            neighbour.mesh.m_domain_min_indices = m_domain_min_indices;
+            neighbour.mesh.m_domain_max_indices = m_domain_max_indices;
 #ifdef SAMURAI_WITH_PETSC
             neighbour.mesh.compute_gravity_center();
 #endif
