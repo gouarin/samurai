@@ -16,7 +16,7 @@
 #           "--Tf 0.1" makes every run about 5 times shorter)
 # GRIDS_<label>  grids for one version only, e.g. GRIDS_main="1x1 2x2" to keep
 #           the slow reference to the small grids
-# TIMEOUT   seconds after which a run is killed (needs timeout or gtimeout)
+# TIMEOUT   seconds after which a run is killed (plain bash, no coreutils needed)
 set -euo pipefail
 
 out=${1:?usage: $0 results_dir}
@@ -27,17 +27,30 @@ LAUNCHER=${LAUNCHER:-"mpiexec -n"}
 DEMO_ARGS=${DEMO_ARGS:-""}
 TIMEOUT=${TIMEOUT:-""}
 
-timeout_cmd=""
-if [ -n "$TIMEOUT" ]; then
-    if command -v timeout > /dev/null; then
-        timeout_cmd="timeout $TIMEOUT"
-    elif command -v gtimeout > /dev/null; then
-        timeout_cmd="gtimeout $TIMEOUT"
-    else
-        echo "TIMEOUT is set but neither timeout nor gtimeout is available" >&2
-        exit 1
+# Run "$@", killed after TIMEOUT seconds if TIMEOUT is set. Written in plain bash
+# (macOS has no timeout command): the launcher gets SIGTERM, which mpiexec and
+# srun forward to the ranks, then SIGKILL 5 s later if it is still there.
+run_with_timeout() {
+    if [ -z "$TIMEOUT" ]; then
+        "$@"
+        return
     fi
-fi
+    "$@" &
+    local pid=$!
+    local waited=0
+    while kill -0 "$pid" 2> /dev/null; do
+        if [ "$waited" -ge "$TIMEOUT" ]; then
+            echo "timeout after ${TIMEOUT} s" >&2
+            kill -TERM "$pid" 2> /dev/null || true
+            sleep 5
+            kill -KILL "$pid" 2> /dev/null || true
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "$pid"
+}
 
 # grids of one version: GRIDS_<label> if set, GRIDS otherwise
 grids_of() {
@@ -75,7 +88,7 @@ for rep in $(seq 1 "$REPS"); do
             echo "[$(date +%H:%M:%S)] $label ${npx}x${npy} rep $rep"
             # check_diff (built into the demo) aborts if the subdomain meshes differ
             # shellcheck disable=SC2086
-            $timeout_cmd $LAUNCHER "$n" "$exe" --npx "$npx" --npy "$npy" --no-output --timers $DEMO_ARGS > "$log" 2>&1 \
+            run_with_timeout $LAUNCHER "$n" "$exe" --npx "$npx" --npy "$npy" --no-output --timers $DEMO_ARGS > "$log" 2>&1 \
                 || echo "  FAILED or timed out (exit code $?), see $log"
         done
     done
