@@ -367,6 +367,9 @@ namespace samurai
         // balancing still exchanges the whole meshes (update_mesh_neighbour_full),
         // since it numbers the neighbour cells.
         std::vector<lca_type> m_band_core;
+        int m_band_width = -1; // the width m_band_core was built with
+        // set when m_band_core was taken from the reference mesh (same subdomain)
+        bool m_band_from_ref = false;
         void build_band_mask();
         ca_type band_of(const ca_type& cells) const;
 
@@ -556,10 +559,21 @@ namespace samurai
         // the reach varies with the coarsest populated level of the cells) and
         // of the periodicity: all must match the inputs the reference
         // neighbourhood was discovered with for the discovery skip to be valid.
-        m_discovery_ghost_reach = ref_mesh.m_discovery_ghost_reach;
-        m_discovery_periodicity = ref_mesh.m_discovery_periodicity;
-        m_same_subdomain_as_ref = (m_same_cells_as_ref || m_subdomain == ref_mesh.m_subdomain)
-                               && ghost_physical_reach() == m_discovery_ghost_reach && m_config.periodic() == m_discovery_periodicity;
+        m_discovery_ghost_reach   = ref_mesh.m_discovery_ghost_reach;
+        m_discovery_periodicity   = ref_mesh.m_discovery_periodicity;
+        const bool same_subdomain = m_same_cells_as_ref || m_subdomain == ref_mesh.m_subdomain;
+        m_same_subdomain_as_ref   = same_subdomain && ghost_physical_reach() == m_discovery_ghost_reach
+                               && m_config.periodic() == m_discovery_periodicity;
+
+        // The band core only depends on the subdomain and on the band width:
+        // reuse the one of the reference mesh when both are unchanged (which is
+        // the case at every adaptation until a load balancing).
+        if (same_subdomain && ref_mesh.m_band_width == neighbour_band_width() && ref_mesh.m_band_core.size() == max_level() + 1)
+        {
+            m_band_core     = ref_mesh.m_band_core;
+            m_band_width    = ref_mesh.m_band_width;
+            m_band_from_ref = true;
+        }
 #endif
 
         exchange_neighbour_meshes();
@@ -599,7 +613,13 @@ namespace samurai
     SAMURAI_INLINE void Mesh_base<D, Config>::finalize_mesh(const coords_t& origin_point, double scaling_factor)
     {
 #ifdef SAMURAI_WITH_MPI
-        build_band_mask();
+        // Without neighbours nothing is sent; otherwise build the band core unless
+        // it was taken from the reference mesh.
+        if (!m_mpi_neighbourhood.empty() && !m_band_from_ref)
+        {
+            build_band_mask();
+        }
+        m_band_from_ref = false;
 #endif
         construct_union();
         update_meshid_neighbour(mesh_id_t::cells);
@@ -1076,6 +1096,7 @@ namespace samurai
         // The band mask describes the band the neighbours received of this
         // mesh: it moves with the cells.
         swap(m_band_core, mesh.m_band_core);
+        swap(m_band_width, mesh.m_band_width);
 #endif
     }
 
@@ -1364,6 +1385,7 @@ namespace samurai
     {
         const int width       = neighbour_band_width();
         const std::size_t top = max_level();
+        m_band_width          = width;
 
         // Interior of the subdomain at each level: the cells entirely covered by
         // it, from the finest level (where the subdomain is exact) down. A level-l
