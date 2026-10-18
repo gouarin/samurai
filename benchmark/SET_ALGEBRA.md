@@ -31,7 +31,9 @@ For numbers worth comparing, use `--benchmark_repetitions=5
 --benchmark_report_aggregates_only=true`, read the medians, and keep the machine idle.
 
 Every benchmark reports `itv` and `cells` (what the set emitted per iteration)
-and `t/itv`, the time per emitted interval. The benchmarks on adapted meshes
+and `t/itv`, the time per emitted interval. A site that builds level cell
+arrays reports the intervals and cells of the arrays it keeps; a benchmark
+that only asks whether sets are empty reports `nonempty` instead. The benchmarks on adapted meshes
 also report the mesh: `leaves`, `leaf_itv` and `levels`.
 
 Most binaries need only samurai's interval structures (`LevelCellArray`,
@@ -42,8 +44,9 @@ if the algebra is optimized or replaced. Their inputs come from these headers:
   synthetic `LevelCellArray`s with a controlled shape.
 - `site_inputs.hpp` holds `SiteInputs`, the sets the library call sites read
   from an MR-adapted mesh (cells, ghosts, reference, projection cells, union,
-  domain and subdomain pyramids, corners, and the cells of the next adaptation
-  step before graduation), and reads and writes the files. The
+  domain and subdomain pyramids, corners, the cells of the next adaptation
+  step before graduation and the four sets `update_cell_array_from_tag` builds
+  them from), and reads and writes the files. The
   file format is described at the top of the header, so another implementation
   of the algebra can run on the same inputs.
 - `set_call_sites.hpp` holds the call site expressions copied from the library,
@@ -52,8 +55,10 @@ if the algebra is optimized or replaced. Their inputs come from these headers:
 - `set_algebra_backend.hpp` defines the backend interface and samurai's static
   algebra as a backend (`static`); `set_algebra_dynamic_backend.hpp` holds the
   dynamic algebra (`dynamic`).
-- `call_site_benchmarks.hpp` holds the benchmarks of the call sites and
-  registers them for one backend.
+- `set_modes.hpp` holds the ways to consume a set and the operators the call
+  sites do not cover, each paired with a variant that gives the same cells.
+- `call_site_benchmarks.hpp` holds the benchmarks of the call sites and of the
+  modes, and registers them for one backend.
 
 `mr_fixtures.hpp` builds the MR-adapted meshes, refined around the surfaces of K
 balls, and copies their sets into `SiteInputs`. Only
@@ -64,7 +69,7 @@ balls, and copies their sets into `SiteInputs`. Only
 | `bench_set_operators` | algebra | Cost of the operators at one level: the floor of a traversal against a raw loop, the arity of intersection and union (with in-phase operands and nested binary operators as controls), and the expansion width. |
 | `bench_set_projection` | algebra | Cost of `.on()`: coarsening against the level difference, compared with the same coarse set already built and with building it once; refinement as a control; coarsening of an N-ary intersection, of a chained projection and inside an expansion. |
 | `bench_set_mesh_shape` | algebra | Effect of the shape of a level: the same cells cut into K stripes along each axis, and the same front cut into P subdomains along each axis. |
-| `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step, copied from their source (`BM_Site_*`), and two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`), for each registered backend. |
+| `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step or mesh construction, copied from their source (`BM_Site_*`), two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`), and the ways to consume a set (`BM_Mode_*`), for each registered backend. |
 | `bench_dynamic_set` | algebra, input files | The same sites with the `static` and `dynamic` backends, on one 2D and one 3D mesh: the price of the runtime algebra. |
 | `bench_set_graduation` | algebra, `make_graduation`, input files | Cost of `make_graduation` on the cells the adaptation passes to it, before graduation. It reports the cells before (`cells_in`) and after (`cells_out`). |
 | `bench_set_library_ops` | mesh, MR adaptation, fields, schemes | The sets of `BM_Site_*` with the library's field operator (`BM_SiteOp_*`), and the library operations themselves (`BM_Op_*`), on the meshes and arguments of `bench_set_call_sites`. |
@@ -79,6 +84,69 @@ application that includes the mesh and the schemes is in the large case, so
 the ratio may understate the share of the algebra there.
 `BM_Op_AdaptStep` and `BM_Op_MeshConstruction` also report the time of their
 phases, read from samurai's timers, in ms per iteration.
+
+## Coverage
+
+The library usages of the set algebra and the benchmark that measures them.
+Each site was checked once against the library on the meshes of
+`mesh_cases`, in 1D, 2D and 3D: the level cell arrays it builds are equal to
+those of the mesh, and the boundary condition sites hold exactly the ghosts
+the library writes.
+
+| Library usage | Source | Benchmark |
+| --- | --- | --- |
+| Prediction ghosts of the mesh construction | `mr/mesh.hpp:366-371` | `BM_Site_MeshPredictionGhosts` |
+| `MRMesh::update_sub_mesh_impl`, whole: scheme ghosts added to a cell list in no order, prediction ghosts, reference refined under the union, projection cells | `mr/mesh.hpp:229` | `BM_Site_MeshSubMesh` |
+| `construct_union` | `mesh.hpp:1274` | `BM_Site_ConstructUnion` |
+| `build_pyramid` of the domain | `mesh.hpp:1250` | `BM_Site_BuildPyramid` |
+| `construct_corners` | `mesh.hpp:937` | `BM_Site_Corners` |
+| `amr::Mesh::update_sub_mesh_impl` | `amr/mesh.hpp:197` | `BM_Site_AmrSubMesh` |
+| `update_cell_array_from_tag`, its set expression | `algorithm/graduation.hpp:844-850` | `BM_Site_CellArrayFromTag` |
+| `make_graduation` | `algorithm/graduation.hpp` | `BM_Graduation` |
+| `update_ghost_mr`: projection and prediction of the ghosts | `algorithm/update_ghost_mr.hpp` | `BM_Site_GhostProjection`, `BM_Site_GhostPrediction` |
+| `update_outer_ghosts`: `project_bc`, `predict_bc`, `project_corner_below` | `algorithm/update_outer_ghost.hpp` | `BM_Site_OuterGhosts` |
+| `project_bc`: the children of each projection ghost, one expression per ghost | `algorithm/update_outer_ghost.hpp:75-153` | `BM_Site_PerCellChildren` |
+| `apply_bc_impl` (region at the finest level) | `bc/apply_field_bc.hpp:121-124` | `BM_Site_BcCells` |
+| `update_outer_corners_by_polynomial_extrapolation` | `bc/apply_field_bc.hpp:517` | `BM_Site_BcCorners` |
+| `update_further_ghosts_by_polynomial_extrapolation` (ghost width above 1) | `bc/apply_field_bc.hpp:715` | `BM_Site_BcFurtherGhosts` |
+| `compute_cell_ownership` on one rank: one expression per ghost without an owner | `petsc/compute_cell_ownership.hpp:166-247` | `BM_Site_OwnershipPerCell` |
+| `Adapt::harten`: details and tags | `mr/adapt.hpp` | `BM_Site_Detail`, `BM_Site_Tag` |
+| `update_fields` | `algorithm/update_fields.hpp` | `BM_Site_FieldTransfer` |
+| `for_each_interface` | `interface.hpp` | `BM_Site_Interfaces` |
+| `domain_boundary(mesh, level)`: `contract` | `boundary.hpp:48` | `BM_Mode_Contract` |
+
+`BM_Site_OwnershipPerCell` finds the ghosts without an owner outside the
+timed loop: the library reads them from the owners it has set, which needs
+MPI and PETSc. `BM_Site_PerCellChildren` and `BM_Site_OwnershipPerCell` build
+the one-cell `LevelCellArray` with the builder of the backend, where the
+library appends the cell to a `LevelCellArray` it clears after use.
+
+The modes (`set_modes.hpp`) run on the same meshes. Each pair yields the
+same cells:
+
+| Benchmark | Compared with | Question |
+| --- | --- | --- |
+| `BM_Mode_Materialize` (`to_lca()`, `LevelCellArray(set)`), `BM_Mode_Build` (builder fed in order) | `BM_Mode_Traverse` | Cost of building a level cell array from a set |
+| `BM_Mode_EmptyHit` (the answer comes at the first interval) | `BM_Mode_EmptyMiss` (empty sets) | Early exit of `empty()` |
+| `BM_Mode_ContractMasked` (along x) | `BM_Mode_Contract` | Contraction, 2 dim + 1 operands |
+| `BM_Mode_ExpandAxes`, `BM_Mode_ExpandMasked` | `BM_Mode_ExpandUniform` | Expansion by one width per axis or along masked axes |
+| `BM_Mode_OnMixedLevels` (an operand at the finest level) | `BM_Mode_OnSameLevel` | `.on(level)` that refines an operand and coarsens it back |
+| `BM_Mode_NestedOn` (`bc/apply_field_bc.hpp:389-392`) | `BM_Mode_FlatOn` | A chain of `.on(level)` at the level of the operands |
+| `BM_Mode_IntersectionSelfOn` (`amr/mesh.hpp:258`) | `BM_Mode_SelfOn` | `intersection(X, X).on(l - 1)` against `self(X).on(l - 1)` |
+
+Not covered yet: the periodic ghosts and directions, the MPI exchanges and
+neighbour subdomains (including `construct_subdomain` and the diffusion load
+balancer, which builds a `CellArray` per coarse cell,
+`load_balancing/strategies/diffusion.hpp:446-500`), domains with holes, and
+the sweep over the max level. `MROMesh::update_sub_mesh_impl`
+(`mr/mesh_with_overleaves.hpp`) is not measured: its constructors call
+`Mesh_base` constructors that no longer exist, so it does not compile, and
+only the legacy LBM demos, which are not built, use it.
+
+`bench_dynamic_set` leaves out the sites the dynamic algebra gets wrong:
+`MeshPredictionGhosts` and `MeshSubMesh` (`dyn::expand` of a set
+projection), and `BM_Mode_Contract` (`dyn::contract` returns other cells in
+3D).
 
 ## Adding a backend
 
@@ -280,8 +348,8 @@ against 43 µs).
 
 - Sequential runs only: the MPI exchanges and the neighbour subdomains are not
   measured; `BM_Partitioned` only reproduces the cost of the partition shape.
-- The boundary condition itself (`apply_field_bc`) and the periodic ghosts are
-  not in `BM_Site_OuterGhosts`.
+- `BM_Site_OuterGhosts` holds neither the boundary condition, measured apart
+  by the `BM_Site_Bc*` sites, nor the periodic ghosts.
 - `BM_Graduation` cannot be split into sites: the MR graduation is a pipeline
   of materialized sets, so its whole time is set algebra and the building of
   `LevelCellArray`s. Its input is the first iteration of an adaptation step,
