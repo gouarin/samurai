@@ -3,10 +3,11 @@
 
 // Price of the dynamic set algebra (include/samurai/subset/dynamic/) against
 // the static one: the call sites of bench_set_call_sites with both backends,
-// on two 2D and two 3D meshes of bench::mesh_cases. Each site builds its
-// expressions inside the timed loop, as the library does, so the dynamic
-// figure includes the construction of their heap-allocated nodes. The ratio
-// dynamic/BM_Site_X / static/BM_Site_X is the price of the runtime tree.
+// on the main 2D and 3D meshes of bench::mesh_cases, on each geometry. Each
+// site builds its expressions inside the timed loop, as the library does, so
+// the dynamic figure includes the construction of their heap-allocated
+// nodes. The ratio dynamic/BM_Site_X / static/BM_Site_X is the price of the
+// runtime tree.
 
 #include <algorithm>
 #include <array>
@@ -23,15 +24,17 @@
 
 namespace
 {
-    // The most fronts at the default max level, stencil radius 1, and the
-    // mesh of the same fronts on the domain with a hole.
+    // The most fronts at the default max level, stencil radius 1, on the
+    // three geometries.
     template <std::size_t dim>
     std::vector<bench::MeshCase> mesh_cases()
     {
-        constexpr std::size_t nballs = (dim == 2) ? 16 : 8;
+        constexpr std::size_t nballs    = (dim == 2) ? 16 : 8;
+        constexpr std::size_t max_level = bench::default_max_level<dim>();
         return {
-            {bench::default_max_level<dim>(), nballs, 1},
-            {bench::default_max_level<dim>() - 2, nballs, 1, bench::Geometry::hole}
+            {max_level, nballs, 1},
+            {max_level - 2, nballs, 1, bench::Geometry::hole},
+            {max_level, nballs, 1, bench::Geometry::periodic}
         };
     }
 

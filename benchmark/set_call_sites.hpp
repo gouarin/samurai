@@ -26,23 +26,176 @@
 
 namespace bench::sites
 {
-    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp): the ghosts the prediction
-    // needs one and two levels below each cell, then the projection cells.
-    template <class B, std::size_t dim, class CA, class SubdomainAt, class F>
-    void mesh_prediction_ghosts(const SiteInputs<dim, CA>& in, SubdomainAt&& subdomain_at, F&& f)
+    //////////////////////////////////////////////////////////////////////
+    // Periodicity
+    //////////////////////////////////////////////////////////////////////
+
+    template <std::size_t d, std::size_t dim>
+    void periodic_directions(const std::array<int, dim>& translation,
+                             int delta,
+                             const std::array<bool, dim>& is_periodic,
+                             std::vector<samurai::DirectionVector<dim>>& directions,
+                             samurai::DirectionVector<dim>& current)
+    {
+        // start_shift_neg (algorithm/graduation.hpp:32-35)
+        const auto shifted = [delta](int value)
+        {
+            return delta >= 0 ? value >> delta : value << -delta;
+        };
+        const auto next = [&]()
+        {
+            if constexpr (d == dim - 1)
+            {
+                directions.push_back(current);
+            }
+            else
+            {
+                periodic_directions<d + 1>(translation, delta, is_periodic, directions, current);
+            }
+        };
+        if (is_periodic[d])
+        {
+            current[d] = shifted(-translation[d]);
+            next();
+            current[d] = shifted(translation[d]);
+            next();
+        }
+        current[d] = 0;
+        next();
+    }
+
+    // detail::get_periodic_directions(translation, delta, is_periodic)
+    // (algorithm/graduation.hpp:68-76): the translations by -translation[d],
+    // +translation[d] (shifted right by delta) or 0 along each periodic axis
+    // d, and 0 along the others, but the zero vector, in the order of the
+    // library. With a translation of 1 along every axis and delta = 0, these
+    // are the directions of detail::get_periodic_directions(is_periodic)
+    // (mesh.hpp:45-79).
+    template <std::size_t dim>
+    std::vector<samurai::DirectionVector<dim>>
+    periodic_directions(const std::array<int, dim>& translation, int delta, const std::array<bool, dim>& is_periodic)
+    {
+        samurai::DirectionVector<dim> current;
+        current.fill(0);
+        std::vector<samurai::DirectionVector<dim>> directions;
+        periodic_directions<0>(translation, delta, is_periodic, directions, current);
+        directions.pop_back();
+        return directions;
+    }
+
+    template <std::size_t dim, class CA>
+    bool is_periodic(const SiteInputs<dim, CA>& in)
+    {
+        return std::any_of(in.periodic.begin(),
+                           in.periodic.end(),
+                           [](bool p)
+                           {
+                               return p;
+                           });
+    }
+
+    // The number of cells of the domain along each axis at max_level, the
+    // translation of a periodic copy of the mesh (mr/mesh.hpp:291-298).
+    template <std::size_t dim, class CA>
+    std::array<int, dim> domain_extent(const SiteInputs<dim, CA>& in)
+    {
+        std::array<int, dim> extent;
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            extent[d] = in.domain_max[d] - in.domain_min[d];
+        }
+        return extent;
+    }
+
+    // The directions of the periodic copies of the cells
+    // MRMesh::update_sub_mesh_impl adds (mr/mesh.hpp:288-299), at max_level:
+    // none when the mesh is not periodic.
+    template <std::size_t dim, class CA>
+    std::vector<samurai::DirectionVector<dim>> periodic_copies(const SiteInputs<dim, CA>& in)
+    {
+        if (!is_periodic(in))
+        {
+            return {};
+        }
+        return periodic_directions(domain_extent(in), 0, in.periodic);
+    }
+
+    // get_periodic_shift(mesh.domain(), level, d) (utils.hpp:489-502).
+    template <std::size_t dim, class CA>
+    samurai::DirectionVector<dim> periodic_shift(const SiteInputs<dim, CA>& in, std::size_t level, std::size_t d)
+    {
+        const std::size_t delta_l = in.max_level - level;
+        samurai::DirectionVector<dim> shift;
+        shift.fill(0);
+        shift[d] = (in.domain_max[d] - in.domain_min[d]) >> delta_l;
+        return shift;
+    }
+
+    // d >> delta_l, componentwise, as xtensor computes it.
+    template <std::size_t dim>
+    samurai::DirectionVector<dim> shift_right(const samurai::DirectionVector<dim>& d, int delta_l)
+    {
+        samurai::DirectionVector<dim> out;
+        for (std::size_t k = 0; k < dim; ++k)
+        {
+            out[k] = d[k] >> delta_l;
+        }
+        return out;
+    }
+
+    // add_prediction_ghosts of MRMesh::update_sub_mesh_impl
+    // (mr/mesh.hpp:334-382) for the cells of one level: the ghosts the
+    // prediction needs one level below (passed first to g(level, set)), then
+    // two levels below, for the cells and for each periodic copy of them
+    // (directions, at max_level). cag gives the cells and ghosts of the level.
+    template <class B, std::size_t dim, class CA, class Cag, class SubdomainAt, class G>
+    void prediction_ghosts(const SiteInputs<dim, CA>& in,
+                           const Cag& cag,
+                           SubdomainAt&& subdomain_at,
+                           const std::vector<samurai::DirectionVector<dim>>& directions,
+                           std::size_t level,
+                           G&& g)
     {
         using A              = Algebra<B>;
         constexpr int pred_r = prediction_stencil_radius;
-        const auto& cells    = in.cells;
-        const auto& cag      = in.cells_and_ghosts;
+        const auto add       = [&](const auto& subset_cells, const auto& subset_cells_and_ghosts)
+        {
+            g(level - 1, subset_cells_and_ghosts);
+            if (level - 1 > 0)
+            {
+                g(level - 2, subset_cells);
+            }
+        };
+        // own part
+        add(A::expand(A::on(in.cells[level], level - 2), pred_r),
+            A::intersection(A::expand(A::on(cag[level], level - 1), pred_r), A::expand(subdomain_at(level - 1), pred_r)));
+        // periodic part
+        const int delta_l = static_cast<int>(in.max_level - level);
+        for (const auto& d : directions)
+        {
+            const auto t = shift_right(d, delta_l);
+            add(A::intersection(A::expand(A::on(A::translate(in.cells[level], t), level - 2), pred_r), subdomain_at(level - 2)),
+                A::intersection(A::expand(A::on(A::translate(cag[level], t), level - 1), pred_r), subdomain_at(level - 1)));
+        }
+    }
+
+    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:357-382, 444): the ghosts the
+    // prediction needs one and two levels below each cell, and below its
+    // periodic copies, then the projection cells. The library visits the
+    // levels that have cells, from min_level >= 2 here.
+    template <class B, std::size_t dim, class CA, class SubdomainAt, class F>
+    void mesh_prediction_ghosts(const SiteInputs<dim, CA>& in, SubdomainAt&& subdomain_at, F&& f)
+    {
+        using A               = Algebra<B>;
+        const auto& cells     = in.cells;
+        const auto directions = periodic_copies(in);
         for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
         {
             if (level < 2 || A::empty(cells[level]))
             {
                 continue;
             }
-            f(level - 2, A::expand(A::on(cells[level], level - 2), pred_r));
-            f(level - 1, A::intersection(A::expand(A::on(cag[level], level - 1), pred_r), A::expand(subdomain_at(level - 1), pred_r)));
+            prediction_ghosts<B>(in, in.cells_and_ghosts, subdomain_at, directions, level, f);
         }
         for (std::size_t level = in.reference.min_level(); level <= in.reference.max_level(); ++level)
         {
@@ -199,6 +352,23 @@ namespace bench::sites
         return outer_boundary.build();
     }
 
+    // Whether one of the axes `direction` moves along is periodic: such a
+    // direction has no boundary, and update_outer_ghosts and the boundary
+    // conditions skip it (update_outer_ghost.hpp:357-368, 386, 433;
+    // bc/apply_field_bc.hpp:102-111, 226-232, 698-707).
+    template <std::size_t dim, class CA, class Direction>
+    bool crosses_periodic_axis(const SiteInputs<dim, CA>& in, const Direction& direction)
+    {
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            if (direction[d] != 0 && in.periodic[d])
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // The ghosts of the Dirichlet condition of the adapted meshes, and
     // max_coarse_layer of update_outer_ghosts: one layer.
     inline constexpr int n_bc_ghosts = 1;
@@ -253,6 +423,10 @@ namespace bench::sites
                     samurai::for_each_diagonal_direction<dim>(
                         [&](const auto& direction)
                         {
+                            if (crosses_periodic_axis(in, direction))
+                            {
+                                return;
+                            }
                             for (std::size_t delta_l = 1; delta_l <= 2 && delta_l <= level; ++delta_l)
                             {
                                 auto fine_inner_corner = A::on(in.corner(direction), level);
@@ -263,8 +437,12 @@ namespace bench::sites
                 }
             }
             samurai::for_each_cartesian_direction<dim>(
-                [&](auto, const auto& direction)
+                [&](std::size_t axis, const auto& direction)
                 {
+                    if (in.periodic[axis])
+                    {
+                        return;
+                    }
                     if (level < in.max_level)
                     {
                         projection_bc_ghosts<B>(in, level, domain_at(level), direction, f);
@@ -335,8 +513,11 @@ namespace bench::sites
         }
     }
 
-    // for_each_interface (interface.hpp): faces between cells of the same
-    // level, then between a cell and a finer one.
+    // for_each_interior_interface (interface.hpp:340-361) in each positive
+    // Cartesian direction, at each level: faces between cells of the same
+    // level (lines 34-108), then between a cell and a finer one on either
+    // side (lines 125-223 and 239-323), each also across the periodic
+    // boundary when the mesh is periodic along the direction.
     template <class B, std::size_t dim, class CA, class F>
     void interfaces(const SiteInputs<dim, CA>& in, F&& f)
     {
@@ -348,11 +529,37 @@ namespace bench::sites
             const samurai::DirectionVector<dim> direction = xt::view(directions, d);
             for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
             {
-                f(level, A::intersection(cells[level], A::translate(cells[level], -direction)));
-                if (level < cells.max_level())
+                const auto& coarse = cells[level];
+                // same level
+                f(level, A::intersection(coarse, A::translate(coarse, -direction)));
+                if (in.periodic[d])
                 {
-                    f(level + 1, A::on(A::intersection(cells[level], A::translate(cells[level + 1], -direction)), level + 1));
-                    f(level + 1, A::on(A::intersection(cells[level], A::translate(cells[level + 1], direction)), level + 1));
+                    const auto shift = periodic_shift(in, level, d);
+                    f(level, A::intersection(coarse, A::translate(A::translate(coarse, shift), -direction)));
+                    f(level, A::intersection(A::translate(coarse, -shift), A::translate(coarse, -direction)));
+                }
+                if (level >= cells.max_level())
+                {
+                    continue;
+                }
+                const auto& fine = cells[level + 1];
+                // level jump in the direction
+                f(level + 1, A::on(A::intersection(coarse, A::translate(fine, -direction)), level + 1));
+                if (in.periodic[d])
+                {
+                    const auto fine_shift   = periodic_shift(in, level + 1, d);
+                    const auto coarse_shift = periodic_shift(in, level, d);
+                    f(level + 1, A::on(A::intersection(coarse, A::translate(A::translate(fine, fine_shift), -direction)), level + 1));
+                    f(level + 1, A::on(A::intersection(A::translate(coarse, -coarse_shift), A::translate(fine, -direction)), level + 1));
+                }
+                // level jump in the opposite direction
+                f(level + 1, A::on(A::intersection(coarse, A::translate(fine, direction)), level + 1));
+                if (in.periodic[d])
+                {
+                    const auto fine_shift   = periodic_shift(in, level + 1, d);
+                    const auto coarse_shift = periodic_shift(in, level, d);
+                    f(level + 1, A::on(A::intersection(coarse, A::translate(A::translate(fine, -fine_shift), direction)), level + 1));
+                    f(level + 1, A::on(A::intersection(A::translate(coarse, coarse_shift), A::translate(fine, direction)), level + 1));
                 }
             }
         }
@@ -499,75 +706,112 @@ namespace bench::sites
         }
     }
 
-    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:229), sequential and not
-    // periodic, at every mesh construction: the cells and ghosts (scheme
-    // ghosts added row by row to a cell list, in no order), the prediction
-    // ghosts (the expressions of mesh_prediction_ghosts, added to the same
-    // cell list), then the reference cells, refined level by level where the
-    // union covers them, and the projection cells. Emits cells_and_ghosts,
-    // then reference, then proj_cells, each from level 0 to max_level + 1.
+    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:229), sequential, at every
+    // mesh construction: the cells and ghosts (scheme ghosts added row by row
+    // to a cell list, in no order), the periodic copies of the cells
+    // (mr/mesh.hpp:283-322), the prediction ghosts (prediction_ghosts, added
+    // to the same cell list), then the reference cells, refined level by
+    // level where the union covers them, and the projection cells. Emits
+    // cells_and_ghosts, then reference, then proj_cells, each from level 0 to
+    // max_level + 1.
     template <class B, std::size_t dim, class CA, class Emit>
     void mesh_sub_mesh(const SiteInputs<dim, CA>& in, Emit&& emit)
     {
         using A                     = Algebra<B>;
-        constexpr int pred_r        = prediction_stencil_radius;
         const auto& cells           = in.cells;
         const std::size_t max_level = in.max_level;
+        const int radius            = in.max_stencil_radius;
 
         BuilderList<B, dim> cell_list(max_level);
-        add_scheme_ghosts(cell_list, cells, in.max_stencil_radius);
+        add_scheme_ghosts(cell_list, cells, radius);
         const auto cells_and_ghosts = cell_list.build();
 
-        auto reference = cells_and_ghosts;
+        const auto subdomain_at = [&](std::size_t level)
+        {
+            return A::on(in.subdomain(), level);
+        };
+
+        // for_each_level visits the levels that have cells
+        const auto for_each_level = [&](auto&& g)
+        {
+            for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
+            {
+                if (!A::empty(cells[level]))
+                {
+                    g(level);
+                }
+            }
+        };
+
+        const auto directions = periodic_copies(in);
+        for_each_level(
+            [&](std::size_t level)
+            {
+                const int delta_l = static_cast<int>(max_level - level);
+                for (const auto& d : directions)
+                {
+                    A::traverse(A::intersection(A::expand(A::translate(cells[level], shift_right(d, delta_l)), radius),
+                                                A::expand(subdomain_at(level), radius)),
+                                add_to<dim>(cell_list[level]));
+                }
+            });
+
         std::vector<lca_t<B, dim>> proj_cells;
         for (std::size_t level = 0; level <= max_level + 1; ++level)
         {
             proj_cells.push_back(A::template builder<dim>(level).build());
         }
 
-        if (max_level != in.min_level)
+        if (max_level == in.min_level)
         {
-            // for_each_level visits the levels that have cells
-            for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
-            {
-                if (A::empty(cells[level]))
-                {
-                    continue;
-                }
-                A::traverse(A::intersection(A::expand(A::on(cells_and_ghosts[level], level - 1), pred_r),
-                                            A::expand(A::on(in.subdomain(), level - 1), pred_r)),
-                            add_to<dim>(cell_list[level - 1]));
-                if (level - 1 > 0)
-                {
-                    A::traverse(A::expand(A::on(cells[level], level - 2), pred_r), add_to<dim>(cell_list[level - 2]));
-                }
-            }
-
-            reference = cell_list.build();
-
-            for (std::size_t level = 0; level <= max_level; ++level)
-            {
-                if (A::empty(reference[level]))
-                {
-                    continue;
-                }
-                auto& lcl     = cell_list[level + 1];
-                auto lcl_proj = A::template builder<dim>(level);
-                A::traverse(A::intersection(reference[level], in.union_[level]),
-                            [&](const auto& i, const auto& index_yz)
-                            {
-                                const auto yz = to_index<dim>(index_yz);
-                                samurai::static_nested_loop<dim - 1, 0, 2>(
-                                    [&](const auto& stencil)
-                                    {
-                                        lcl.add_interval(interval_t<dim>{i.start << 1, i.end << 1}, index_t<dim>((yz << 1) + stencil));
-                                    });
-                                lcl_proj.add_interval(interval_t<dim>{i.start, i.end}, yz);
-                            });
-                reference[level + 1] = lcl.build();
-                proj_cells[level]    = lcl_proj.build();
-            }
+            const auto reference = cell_list.build();
+            emit_levels(cells_and_ghosts, emit);
+            emit_levels(reference, emit);
+            emit_levels(proj_cells, emit);
+            return;
         }
+
+        for_each_level(
+            [&](std::size_t level)
+            {
+                prediction_ghosts<B>(in,
+                                     cells_and_ghosts,
+                                     subdomain_at,
+                                     directions,
+                                     level,
+                                     [&](std::size_t ghost_level, const auto& set)
+                                     {
+                                         A::traverse(set, add_to<dim>(cell_list[ghost_level]));
+                                     });
+            });
+
+        auto reference = cell_list.build();
+
+        for (std::size_t level = 0; level <= max_level; ++level)
+        {
+            if (A::empty(reference[level]))
+            {
+                continue;
+            }
+            auto& lcl     = cell_list[level + 1];
+            auto lcl_proj = A::template builder<dim>(level);
+            A::traverse(A::intersection(reference[level], in.union_[level]),
+                        [&](const auto& i, const auto& index_yz)
+                        {
+                            const auto yz = to_index<dim>(index_yz);
+                            samurai::static_nested_loop<dim - 1, 0, 2>(
+                                [&](const auto& stencil)
+                                {
+                                    lcl.add_interval(interval_t<dim>{i.start << 1, i.end << 1}, index_t<dim>((yz << 1) + stencil));
+                                });
+                            lcl_proj.add_interval(interval_t<dim>{i.start, i.end}, yz);
+                        });
+            reference[level + 1] = lcl.build();
+            proj_cells[level]    = lcl_proj.build();
+        }
+        // the library builds the reference cells once more from the cell
+        // list (mr/mesh.hpp:458), which holds the same cells
+        reference = cell_list.build();
 
         emit_levels(cells_and_ghosts, emit);
         emit_levels(reference, emit);
@@ -717,6 +961,142 @@ namespace bench::sites
     }
 
     //////////////////////////////////////////////////////////////////////
+    // Periodic ghosts, at every ghost update
+    //////////////////////////////////////////////////////////////////////
+
+    // LevelCellArray(level, box) of the cells [min_corner, max_corner), as
+    // the library builds a box; through the builder of a backend with level
+    // cell arrays of its own.
+    template <class B, std::size_t dim>
+    auto box_lca(std::size_t level, const std::array<int, dim>& min_corner, const std::array<int, dim>& max_corner)
+    {
+        using lca_type = typename B::template lca_t<dim>;
+        if constexpr (std::is_same_v<lca_type, samurai::LevelCellArray<dim>>)
+        {
+            xt::xtensor_fixed<int, xt::xshape<dim>> lo;
+            xt::xtensor_fixed<int, xt::xshape<dim>> hi;
+            for (std::size_t d = 0; d < dim; ++d)
+            {
+                lo[d] = min_corner[d];
+                hi[d] = max_corner[d];
+            }
+            return samurai::LevelCellArray<dim>(level, samurai::Box<int, dim>(lo, hi));
+        }
+        else
+        {
+            auto builder = Algebra<B>::template builder<dim>(level);
+            if constexpr (dim == 1)
+            {
+                builder.add_interval(interval_t<dim>{min_corner[0], max_corner[0]}, index_t<dim>{});
+            }
+            else
+            {
+                std::array<int, dim - 1> lo;
+                std::array<int, dim - 1> hi;
+                for (std::size_t d = 1; d < dim; ++d)
+                {
+                    lo[d - 1] = min_corner[d];
+                    hi[d - 1] = max_corner[d];
+                }
+                index_t<dim> index;
+                const auto rows = [&](const auto& self, std::size_t d) -> void
+                {
+                    if (d == dim - 1)
+                    {
+                        builder.add_interval(interval_t<dim>{min_corner[0], max_corner[0]}, index);
+                        return;
+                    }
+                    for (int y = lo[d]; y < hi[d]; ++y)
+                    {
+                        index[d] = y;
+                        self(self, d + 1);
+                    }
+                };
+                rows(rows, 0);
+            }
+            return builder.build();
+        }
+    }
+
+    // iterate_over_periodic_ghosts(level, field, ...)
+    // (algorithm/update_periodic.hpp:34-180), sequential: along each periodic
+    // axis, four boxes of ghost_width layers at both ends of the domain,
+    // built as LevelCellArrays at every call, and the two sets of the ghosts
+    // filled by copy from the other end. update_tag_periodic (lines 210-416)
+    // evaluates the same two sets.
+    template <class B, std::size_t dim, class CA, class F>
+    void periodic_ghosts_at(const SiteInputs<dim, CA>& in, std::size_t level, F&& f)
+    {
+        using A                   = Algebra<B>;
+        const auto& mesh_ref      = in.reference;
+        const int gw              = ghost_width(in);
+        const std::size_t delta_l = in.max_level - level;
+        const auto& min_indices   = in.domain_min;
+        const auto& max_indices   = in.domain_max;
+
+        std::array<int, dim> min_corner;
+        std::array<int, dim> max_corner;
+        samurai::DirectionVector<dim> shift;
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            min_corner[d] = (min_indices[d] >> delta_l) - gw;
+            max_corner[d] = (max_indices[d] >> delta_l) + gw;
+            shift[d]      = 0;
+        }
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            if (!in.periodic[d])
+            {
+                continue;
+            }
+            shift[d] = (max_indices[d] - min_indices[d]) >> delta_l;
+
+            min_corner[d]        = (min_indices[d] >> delta_l) - gw;
+            max_corner[d]        = (min_indices[d] >> delta_l);
+            const auto lca_min_m = box_lca<B>(level, min_corner, max_corner);
+
+            min_corner[d]        = (max_indices[d] >> delta_l) - gw;
+            max_corner[d]        = (max_indices[d] >> delta_l);
+            const auto lca_max_m = box_lca<B>(level, min_corner, max_corner);
+
+            min_corner[d]        = (min_indices[d] >> delta_l);
+            max_corner[d]        = (min_indices[d] >> delta_l) + gw;
+            const auto lca_min_p = box_lca<B>(level, min_corner, max_corner);
+
+            min_corner[d]        = (max_indices[d] >> delta_l);
+            max_corner[d]        = (max_indices[d] >> delta_l) + gw;
+            const auto lca_max_p = box_lca<B>(level, min_corner, max_corner);
+
+            f(level,
+              A::intersection(A::translate(A::intersection(mesh_ref[level], lca_min_p), shift), A::intersection(mesh_ref[level], lca_max_p)));
+            f(level,
+              A::intersection(A::translate(A::intersection(mesh_ref[level], lca_max_m), -shift), A::intersection(mesh_ref[level], lca_min_m)));
+
+            shift[d]      = 0;
+            min_corner[d] = (min_indices[d] >> delta_l) - gw;
+            max_corner[d] = (max_indices[d] >> delta_l) + gw;
+        }
+    }
+
+    // The periodic ghosts of one update_ghost_mr: update_ghost_periodic at
+    // each level twice from max_level down to 0, then once from 1 up to
+    // max_level (update_ghost_mr.hpp:207, 215, 232). Nothing to do on a mesh
+    // that is not periodic.
+    template <class B, std::size_t dim, class CA, class F>
+    void periodic_ghosts(const SiteInputs<dim, CA>& in, F&& f)
+    {
+        for (std::size_t level = in.max_level + 1; level-- > 0;)
+        {
+            periodic_ghosts_at<B>(in, level, f);
+            periodic_ghosts_at<B>(in, level, f);
+        }
+        for (std::size_t level = 1; level <= in.max_level; ++level)
+        {
+            periodic_ghosts_at<B>(in, level, f);
+        }
+    }
+
+    //////////////////////////////////////////////////////////////////////
     // Boundary conditions, at every ghost update
     //////////////////////////////////////////////////////////////////////
 
@@ -751,9 +1131,12 @@ namespace bench::sites
         {
             std::size_t d = 0;
             samurai::for_each_cartesian_direction<dim>(
-                [&](const auto&)
+                [&](std::size_t axis, const auto&)
                 {
-                    f(level, A::on(A::intersection(in.cells[level], regions[d]), level));
+                    if (!in.periodic[axis])
+                    {
+                        f(level, A::on(A::intersection(in.cells[level], regions[d]), level));
+                    }
                     ++d;
                 });
         }
@@ -785,6 +1168,10 @@ namespace bench::sites
                 samurai::for_each_diagonal_direction<dim>(
                     [&](const auto& diagonal)
                     {
+                        if (crosses_periodic_axis(in, diagonal))
+                        {
+                            return;
+                        }
                         const direction_t direction = diagonal;
                         const auto& corner_lca      = in.corner(direction);
                         const auto& cells           = in.cells[level];
@@ -896,8 +1283,12 @@ namespace bench::sites
         for (std::size_t level = in.max_level + 1; level-- > in.min_level;)
         {
             samurai::for_each_cartesian_direction<dim>(
-                [&](const auto& direction)
+                [&](std::size_t axis, const auto& direction)
                 {
+                    if (in.periodic[axis])
+                    {
+                        return;
+                    }
                     const auto& cells     = in.cells[level];
                     const auto& reference = in.reference[level];
                     for (int ghost_layer = ghost_layers_filled_by_bc + 1; ghost_layer <= gw; ++ghost_layer)
@@ -958,8 +1349,12 @@ namespace bench::sites
         for (std::size_t proj_level = in.max_level; proj_level-- > 0;)
         {
             samurai::for_each_cartesian_direction<dim>(
-                [&](const auto& direction)
+                [&](std::size_t axis, const auto& direction)
                 {
+                    if (in.periodic[axis])
+                    {
+                        return;
+                    }
                     auto domain = A::on(in.domain(), proj_level);
                     projection_bc_ghosts<B>(
                         in,

@@ -63,8 +63,9 @@ namespace bench
     // The domain of a mesh (mr_fixtures.hpp builds it).
     enum class Geometry : int
     {
-        box  = 0, // the unit box
-        hole = 1, // the unit box without the box [0.5, 0.75)^dim, built by DomainBuilder::remove
+        box      = 0, // the unit box
+        hole     = 1, // the unit box without the box [0.5, 0.75)^dim, built by DomainBuilder::remove
+        periodic = 2, // the unit box, periodic along every axis
     };
 
     // One adapted mesh, refined to max_level along the surfaces of nballs
@@ -143,7 +144,8 @@ namespace bench
                 {max_level, 16, 1},
                 {max_level, 256, 1},
                 {max_level, 256, 3},
-                {max_level - 2, 256, 1, Geometry::hole}
+                {max_level - 2, 256, 1, Geometry::hole},
+                {max_level, 256, 1, Geometry::periodic}
             };
         }
         else if constexpr (dim == 2)
@@ -153,7 +155,8 @@ namespace bench
                 {max_level, 16, 1},
                 {max_level + 2, 16, 1},
                 {max_level, 16, 3},
-                {max_level - 2, 16, 1, Geometry::hole}
+                {max_level - 2, 16, 1, Geometry::hole},
+                {max_level, 16, 1, Geometry::periodic}
             };
         }
         else
@@ -162,7 +165,8 @@ namespace bench
                 {max_level, 1, 1},
                 {max_level, 8, 1},
                 {max_level, 8, 3},
-                {max_level - 2, 8, 1, Geometry::hole}
+                {max_level - 2, 8, 1, Geometry::hole},
+                {max_level, 8, 1, Geometry::periodic}
             };
         }
         if constexpr (sweep_enabled)
@@ -256,6 +260,11 @@ namespace bench
         bool domain_is_box = true;
         // mesh.periodicity()
         std::array<bool, dim> periodic{};
+        // mesh.domain().min_indices() and max_indices(): the bounds of the
+        // domain at max_level, which give the periodic shifts. Not in the
+        // file: set from the domain when it is read (set_domain_bounds).
+        std::array<int, dim> domain_min{};
+        std::array<int, dim> domain_max{};
 
         ca_t cells;
         ca_t cells_and_ghosts;
@@ -325,6 +334,19 @@ namespace bench
         }
     };
 
+    // Sets SiteInputs::domain_min and domain_max from the domain.
+    template <std::size_t dim>
+    void set_domain_bounds(SiteInputs<dim>& in)
+    {
+        const auto min_indices = in.domain().min_indices();
+        const auto max_indices = in.domain().max_indices();
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            in.domain_min[d] = min_indices[d];
+            in.domain_max[d] = max_indices[d];
+        }
+    }
+
     template <std::size_t dim>
     bool operator==(const SiteInputs<dim>& a, const SiteInputs<dim>& b)
     {
@@ -379,6 +401,8 @@ namespace bench
                 return "";
             case Geometry::hole:
                 return "_hole";
+            case Geometry::periodic:
+                return "_periodic";
         }
         return "";
     }
@@ -545,6 +569,7 @@ namespace bench
                 throw fail("truncated record " + key + " " + name);
             }
         }
+        set_domain_bounds(in);
         return in;
     }
 
@@ -658,6 +683,8 @@ namespace bench
         out.max_stencil_radius = in.max_stencil_radius;
         out.domain_is_box      = in.domain_is_box;
         out.periodic           = in.periodic;
+        out.domain_min         = in.domain_min;
+        out.domain_max         = in.domain_max;
         const auto cell_arrays = named_cell_arrays(in);
         const auto out_arrays  = named_cell_arrays(out);
         for (std::size_t k = 0; k < cell_arrays.size(); ++k)

@@ -12,7 +12,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -116,6 +118,17 @@ namespace bench
                    [&](auto&& f)
                    {
                        sites::outer_ghosts<B>(in, sites::cached_domain(in), f);
+                   });
+        }
+
+        template <class B, std::size_t dim>
+        void PeriodicGhosts(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       sites::periodic_ghosts<B>(in, f);
                    });
         }
 
@@ -322,7 +335,8 @@ namespace bench
     } // namespace call_sites
 
     // Registers the sites for which keep(name) holds, all of them by
-    // default, on the meshes of `cases`.
+    // default, on the meshes of `cases`; the periodic ghosts only on the
+    // periodic meshes, the others have none.
     template <class B, std::size_t dim, class Keep = bool (*)(std::string_view)>
     void register_call_sites(
         const std::vector<MeshCase>& cases,
@@ -332,14 +346,23 @@ namespace bench
             return true;
         })
     {
-        const auto add = [&](const char* site, void (*bm)(benchmark::State&))
+        std::vector<MeshCase> periodic_cases;
+        std::copy_if(cases.begin(),
+                     cases.end(),
+                     std::back_inserter(periodic_cases),
+                     [](const MeshCase& c)
+                     {
+                         return c.geometry == Geometry::periodic;
+                     });
+        const auto add = [&](const char* site, void (*bm)(benchmark::State&), bool periodic_only = false)
         {
-            if (!keep(site))
+            const auto& site_cases = periodic_only ? periodic_cases : cases;
+            if (!keep(site) || site_cases.empty())
             {
                 return;
             }
             const std::string name = std::string(B::name) + "/" + site + "<" + std::to_string(dim) + ">";
-            mesh_args(benchmark::RegisterBenchmark(name, bm), cases);
+            mesh_args(benchmark::RegisterBenchmark(name, bm), site_cases);
         };
         add("BM_Site_MeshPredictionGhosts", call_sites::MeshPredictionGhosts<B, dim>);
         add("BM_SiteCached_MeshPredictionGhosts", call_sites::CachedMeshPredictionGhosts<B, dim>);
@@ -348,6 +371,7 @@ namespace bench
         add("BM_Site_GhostPrediction", call_sites::GhostPrediction<B, dim>);
         add("BM_Site_OuterGhosts", call_sites::OuterGhosts<B, dim>);
         add("BM_SiteCached_OuterGhosts", call_sites::CachedOuterGhosts<B, dim>);
+        add("BM_Site_PeriodicGhosts", call_sites::PeriodicGhosts<B, dim>, true);
         add("BM_Site_Detail", call_sites::Detail<B, dim>);
         add("BM_Site_Tag", call_sites::Tag<B, dim>);
         add("BM_Site_FieldTransfer", call_sites::FieldTransfer<B, dim>);

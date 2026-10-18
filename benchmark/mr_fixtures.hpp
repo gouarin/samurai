@@ -85,17 +85,20 @@ namespace bench
         return 4. * mesh.min_cell_length();
     }
 
-    // The mesh of c before adaptation, on its geometry: the unit box, or
-    // the unit box with a hole as demos/FiniteVolume/linear_convection_obstacle
-    // builds it.
+    // The mesh of c before adaptation, on its geometry: the unit box, the
+    // unit box with a hole as demos/FiniteVolume/linear_convection_obstacle
+    // builds it, or the periodic unit box.
     template <std::size_t dim>
     mr_mesh_t<dim> make_unit_mesh(const MeshCase& c)
     {
-        const auto config = mr_config<dim>(c.max_level, c.stencil_radius);
+        auto config = mr_config<dim>(c.max_level, c.stencil_radius);
         const samurai::Box<double, dim> unit_box(xt::zeros<double>({dim}), xt::ones<double>({dim}));
         switch (c.geometry)
         {
             case Geometry::box:
+                break;
+            case Geometry::periodic:
+                config.periodic(true);
                 break;
             case Geometry::hole:
             {
@@ -175,6 +178,7 @@ namespace bench
             {
                 in.corners.push_back(mesh.corner(direction));
             });
+        set_domain_bounds(in);
         return in;
     }
 

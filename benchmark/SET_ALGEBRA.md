@@ -112,23 +112,29 @@ phases, read from samurai's timers, in ms per iteration.
 
 The library usages of the set algebra and the benchmark that measures them.
 Each site was checked once against the library on the meshes of
-`mesh_cases`, in 1D, 2D and 3D, on the box and on the domain with a hole: the
-level cell arrays it builds are equal to those of the mesh, and the outer
-ghost and boundary condition sites hold exactly the ghosts the library
-writes (`project_corner_below` writes a subset of its sets: it skips a
-coarse ghost whose corner-most child is not in the mesh).
+`mesh_cases`, in 1D, 2D and 3D, on the three geometries: the level cell
+arrays it builds are equal to those of the mesh, the outer ghost and
+boundary condition sites hold exactly the ghosts the library writes
+(`project_corner_below` writes a subset of its sets: it skips a coarse ghost
+whose corner-most child is not in the mesh), the periodic ghosts are those
+`iterate_over_periodic_ghosts` visits at each level, and the interfaces have
+one cell per call of the callback of `for_each_interior_interface`. On a
+periodic axis, the outer ghost and boundary condition sites skip the
+directions the library skips; the periodic meshes are periodic along every
+axis, so these sites have nothing to do there.
 
 | Library usage | Source | Benchmark |
 | --- | --- | --- |
-| Prediction ghosts of the mesh construction | `mr/mesh.hpp:366-371` | `BM_Site_MeshPredictionGhosts` |
-| `MRMesh::update_sub_mesh_impl`, whole: scheme ghosts added to a cell list in no order, prediction ghosts, reference refined under the union, projection cells | `mr/mesh.hpp:229` | `BM_Site_MeshSubMesh` |
+| Prediction ghosts of the mesh construction, and of the periodic copies of the cells | `mr/mesh.hpp:334-382` | `BM_Site_MeshPredictionGhosts` |
+| `MRMesh::update_sub_mesh_impl`, whole: scheme ghosts added to a cell list in no order, periodic copies of the cells, prediction ghosts, reference refined under the union, projection cells | `mr/mesh.hpp:229-460` | `BM_Site_MeshSubMesh` |
 | `construct_union` | `mesh.hpp:1274` | `BM_Site_ConstructUnion` |
 | `build_pyramid` of the domain | `mesh.hpp:1250` | `BM_Site_BuildPyramid` |
 | `construct_corners` | `mesh.hpp:937` | `BM_Site_Corners` |
 | `amr::Mesh::update_sub_mesh_impl` | `amr/mesh.hpp:197` | `BM_Site_AmrSubMesh` |
 | `update_cell_array_from_tag`, its set expression | `algorithm/graduation.hpp:844-850` | `BM_Site_CellArrayFromTag` |
-| `make_graduation` | `algorithm/graduation.hpp` | `BM_Graduation` |
+| `make_graduation`, periodic or not | `algorithm/graduation.hpp` | `BM_Graduation` |
 | `update_ghost_mr`: projection and prediction of the ghosts | `algorithm/update_ghost_mr.hpp` | `BM_Site_GhostProjection`, `BM_Site_GhostPrediction` |
+| `update_ghost_periodic` in `update_ghost_mr` (`iterate_over_periodic_ghosts`: four boxes per periodic axis and the two sets of the copied ghosts), and `update_tag_periodic`, which evaluates the same sets | `algorithm/update_periodic.hpp:34-180`, `210-416` | `BM_Site_PeriodicGhosts` |
 | `update_outer_ghosts`: `project_bc`, `predict_bc`, `project_corner_below`, with their branches for a domain that is not a box | `algorithm/update_outer_ghost.hpp:23-61`, `197-230`, `270-338` | `BM_Site_OuterGhosts` |
 | `project_bc`: the children of each projection ghost, one expression per ghost | `algorithm/update_outer_ghost.hpp:75-153` | `BM_Site_PerCellChildren` |
 | `apply_bc_impl` (region at the finest level) | `bc/apply_field_bc.hpp:121-124` | `BM_Site_BcCells` |
@@ -137,7 +143,7 @@ coarse ghost whose corner-most child is not in the mesh).
 | `compute_cell_ownership` on one rank: one expression per ghost without an owner | `petsc/compute_cell_ownership.hpp:166-247` | `BM_Site_OwnershipPerCell` |
 | `Adapt::harten`: details and tags | `mr/adapt.hpp` | `BM_Site_Detail`, `BM_Site_Tag` |
 | `update_fields` | `algorithm/update_fields.hpp` | `BM_Site_FieldTransfer` |
-| `for_each_interface` | `interface.hpp` | `BM_Site_Interfaces` |
+| `for_each_interior_interface`, with the faces across a periodic boundary | `interface.hpp:34-361` | `BM_Site_Interfaces` |
 | `domain_boundary(mesh, level)`: `contract` | `boundary.hpp:48` | `BM_Mode_Contract` |
 
 `BM_Site_OwnershipPerCell` finds the ghosts without an owner outside the
@@ -159,8 +165,7 @@ same cells:
 | `BM_Mode_NestedOn` (`bc/apply_field_bc.hpp:389-392`) | `BM_Mode_FlatOn` | A chain of `.on(level)` at the level of the operands |
 | `BM_Mode_IntersectionSelfOn` (`amr/mesh.hpp:258`) | `BM_Mode_SelfOn` | `intersection(X, X).on(l - 1)` against `self(X).on(l - 1)` |
 
-Not covered yet: the periodic ghosts and directions, the MPI exchanges and
-neighbour subdomains (including `construct_subdomain` and the diffusion load
+Not covered yet: the MPI exchanges and neighbour subdomains (including `construct_subdomain` and the diffusion load
 balancer, which builds a `CellArray` per coarse cell,
 `load_balancing/strategies/diffusion.hpp:446-500`). `MROMesh::update_sub_mesh_impl`
 (`mr/mesh_with_overleaves.hpp`) is not measured: its constructors call
@@ -212,7 +217,8 @@ traverse the set or `materialize` it.
 
 The benchmarks on adapted meshes take four arguments, `max_level`, the number
 of balls, the max stencil radius and the geometry (`bench::Geometry`: 0 for
-the unit box, 1 for the unit box with a hole):
+the unit box, 1 for the unit box with a hole, 2 for the unit box periodic
+along every axis):
 `static/BM_Site_Tag<3>/7/8/1/0` runs the static backend on the 3D mesh of
 max level 7 refined around 8 balls in the unit box, with a max stencil radius
 of 1. `bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
@@ -223,15 +229,18 @@ of 1. `bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
 | 1D | 16 | 256 | 1 | box | 6,614 |
 | 1D | 16 | 256 | 3 | box | 6,618 |
 | 1D | 14 | 256 | 1 | hole | 3,138 |
+| 1D | 16 | 256 | 1 | periodic | 6,614 |
 | 2D | 10 | 1 | 1 | box | 25,594 |
 | 2D | 10 | 16 | 1 | box | 54,733 |
 | 2D | 12 | 16 | 1 | box | 235,309 |
 | 2D | 10 | 16 | 3 | box | 54,865 |
 | 2D | 8 | 16 | 1 | hole | 47,898 |
+| 2D | 10 | 16 | 1 | periodic | 54,733 |
 | 3D | 7 | 1 | 1 | box | 135,640 |
 | 3D | 7 | 8 | 1 | box | 197,884 |
 | 3D | 7 | 8 | 3 | box | 206,900 |
 | 3D | 5 | 8 | 1 | hole | 192,619 |
+| 3D | 7 | 8 | 1 | periodic | 197,884 |
 
 The domain with a hole is built as in
 `demos/FiniteVolume/linear_convection_obstacle.cpp`: the unit box, from which
@@ -245,6 +254,15 @@ hole has no convex corner, so the corners are those of the box. DomainBuilder
 gives this domain a scaling factor of 1/4, the largest length that divides
 its boxes: at max level L the mesh has the resolution of the unit box at
 L + 2, hence its max level of 2 below the main mesh of its dimension.
+
+The periodic meshes have the cells of the main mesh of their dimension: the
+fronts do not reach the boundary. What changes is the ghosts. The mesh
+construction adds the periodic copies of the cells and their prediction
+ghosts, in 3^dim - 1 directions (`BM_Site_MeshSubMesh<3>`: 12.5 ms against
+5.3 ms on the box), `update_ghost_mr` copies the periodic ghosts
+(`BM_Site_PeriodicGhosts`), the interfaces include those across the
+boundary, and `make_graduation` takes its periodic path
+(`BM_Graduation<3>`: 7.3 ms against 0.47 ms).
 
 With the sweep, `bench::sweep_cases` adds one mesh per max level, with a
 max stencil radius of 1 and the balls of the main mesh of each dimension:
