@@ -36,7 +36,7 @@ also report the mesh: `leaves`, `leaf_itv` and `levels`.
 
 Most binaries need only samurai's interval structures (`LevelCellArray`,
 `CellArray`, `ListOfIntervals`, `Box`) and the set algebra, so they still build
-if the algebra is optimized or replaced. Their inputs come from three headers:
+if the algebra is optimized or replaced. Their inputs come from these headers:
 
 - `set_algebra_fixtures.hpp` holds the traversal and its counters, and
   synthetic `LevelCellArray`s with a controlled shape.
@@ -47,7 +47,13 @@ if the algebra is optimized or replaced. Their inputs come from three headers:
   file format is described at the top of the header, so another implementation
   of the algebra can run on the same inputs.
 - `set_call_sites.hpp` holds the call site expressions copied from the library,
-  which read their operands from `SiteInputs`.
+  which read their operands from `SiteInputs`. They are written once against
+  a backend of the set algebra (see [Adding a backend](#adding-a-backend)).
+- `set_algebra_backend.hpp` defines the backend interface and samurai's static
+  algebra as a backend (`static`); `set_algebra_dynamic_backend.hpp` holds the
+  dynamic algebra (`dynamic`).
+- `call_site_benchmarks.hpp` holds the benchmarks of the call sites and
+  registers them for one backend.
 
 `mr_fixtures.hpp` builds the MR-adapted meshes, refined around the surfaces of K
 balls, and copies their sets into `SiteInputs`. Only
@@ -58,8 +64,8 @@ balls, and copies their sets into `SiteInputs`. Only
 | `bench_set_operators` | algebra | Cost of the operators at one level: the floor of a traversal against a raw loop, the arity of intersection and union (with in-phase operands and nested binary operators as controls), and the expansion width. |
 | `bench_set_projection` | algebra | Cost of `.on()`: coarsening against the level difference, compared with the same coarse set already built and with building it once; refinement as a control; coarsening of an N-ary intersection, of a chained projection and inside an expansion. |
 | `bench_set_mesh_shape` | algebra | Effect of the shape of a level: the same cells cut into K stripes along each axis, and the same front cut into P subdomains along each axis. |
-| `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step, copied from their source (`BM_Site_*`), and two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`). |
-| `bench_dynamic_set` | algebra, input files | Static against dynamic (runtime) algebra on two library expressions. |
+| `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step, copied from their source (`BM_Site_*`), and two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`), for each registered backend. |
+| `bench_dynamic_set` | algebra, input files | The same sites with the `static` and `dynamic` backends, on one 2D and one 3D mesh: the price of the runtime algebra. |
 | `bench_set_graduation` | algebra, `make_graduation`, input files | Cost of `make_graduation` on the cells the adaptation passes to it, before graduation. It reports the cells before (`cells_in`) and after (`cells_out`). |
 | `bench_set_library_ops` | mesh, MR adaptation, fields, schemes | The sets of `BM_Site_*` with the library's field operator (`BM_SiteOp_*`), and the library operations themselves (`BM_Op_*`), on the meshes and arguments of `bench_set_call_sites`. |
 
@@ -74,11 +80,48 @@ the ratio may understate the share of the algebra there.
 `BM_Op_AdaptStep` and `BM_Op_MeshConstruction` also report the time of their
 phases, read from samurai's timers, in ms per iteration.
 
+## Adding a backend
+
+The call sites are written once, against a backend of the set algebra: a
+struct of static functions over its own set expressions. The top of
+`set_algebra_backend.hpp` lists the functions, and the concept
+`bench::SetAlgebraBackend` checks them. `SamuraiStatic` (same file) and
+`SamuraiDynamic` (`set_algebra_dynamic_backend.hpp`) are the two examples. To
+compare a new set algebra with samurai's:
+
+1. Write the backend struct: `name`, the prefix of its benchmarks;
+   `lca_t<dim>`, its level cell array; and the operations `self`,
+   `intersection`, `union_`, `difference`, `translate`, `expand` (one width,
+   one width per axis, or one width along masked axes), `contract` (all axes
+   or masked axes), `on`, `traverse`, `empty`, `materialize` and
+   `builder<dim>(level)`. An operation the prototype lacks can wrap samurai's,
+   as `SamuraiDynamic` does for the expansion per axis. Add
+   `static_assert(bench::SetAlgebraBackend<MyBackend>);` after it, and keep
+   its header free of the mesh stack.
+2. The sites read their operands from `SiteInputs`: samurai
+   `LevelCellArray`s read from the input files. A backend whose `lca_t<dim>`
+   is `samurai::LevelCellArray<dim>` reads them as they are. Any other backend
+   gets a copy in its own `lca_t`, made once outside the timed loop with its
+   builder: `add_interval(interval, index)` for each interval, then `build()`.
+   An operand is either an `lca_t` or a set expression of the backend;
+   `Algebra<B>` passes each `lca_t` through `B::self`.
+3. Register it in `benchmark_set_call_sites.cpp` with
+   `register_backend<MyBackend>()`, next to `SamuraiStatic`, and include its
+   header there (add a `target_include_directories` in `CMakeLists.txt` if it
+   lives outside the repository). Its benchmarks are named
+   `<name>/BM_Site_X<dim>/<args>`, so `--benchmark_filter='^<name>/'` runs
+   only them. Compare their medians with those of `static/` from the same run.
+
+Each site passes every set it evaluates to `f(level, set)`, and
+`bench::run_site` traverses it with `B::traverse`. To check a result,
+traverse the set or `materialize` it.
+
 ## Meshes
 
 The benchmarks on adapted meshes take three arguments, `max_level`, the number
-of balls and the max stencil radius: `BM_Site_Tag<3>/7/8/1` runs on the 3D
-mesh of max level 7 refined around 8 balls, with a max stencil radius of 1.
+of balls and the max stencil radius: `static/BM_Site_Tag<3>/7/8/1` runs the
+static backend on the 3D mesh of max level 7 refined around 8 balls, with a
+max stencil radius of 1.
 `bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
 
 | Dimension | Max level | Balls | Max stencil radius | Leaves |
@@ -214,9 +257,13 @@ box against 0.26 ns for a loop over the `LevelCellArray` (7.5 times) in 2D, 2.6
 times in 3D. It is the floor below which no expression can go. In 1D it costs
 the same as the loop (732 ns against 729 ns on the front).
 
-**7. Dynamic algebra.** The runtime version is 11 to 18 times slower than the
-static one on the ghost projection and the interfaces (3D ghost projection:
-810 µs against 72 µs; 3D interfaces: 2.32 ms against 126 µs).
+**7. Dynamic algebra.** On the call sites (`bench_dynamic_set`, measured
+later on the same day with the sites shared by both backends), the runtime
+version is 5 to 21 times slower than the static one (3D ghost projection:
+873 µs against 68 µs; 3D interfaces: 8.09 ms against 436 µs; 3D corners:
+86.5 ms against 4.10 ms). Its expansion (`dyn::expand`) returns other cells
+than the static one and takes 290 s per iteration on the 3D prediction ghosts
+of the mesh construction, so `bench_dynamic_set` leaves those two sites out.
 
 ### Where the set algebra is not the bottleneck
 
@@ -242,3 +289,9 @@ against 43 µs).
   iterations of the step are not measured.
 - Two runs of the same binary differ by up to 10 to 30% on the smallest
   benchmarks; compare medians of repeated runs.
+- Two builds of the same expressions can differ by 30% on a small site:
+  `BM_Site_Corners<2>` takes 28 to 45 µs depending on the alignment of its
+  loop alone, and the 2D interfaces depend on which calls fit in GCC's
+  inlining budget. Before you attribute a gap to a backend, check that it
+  holds with `-falign-functions=64 -falign-loops=64` and
+  `--param inline-unit-growth=2000`.

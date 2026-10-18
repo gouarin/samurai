@@ -116,11 +116,11 @@ static void BM_SiteOp_GhostProjection(benchmark::State& state)
     auto& u        = get_case<dim>(state).u;
     for (auto _ : state)
     {
-        sites::ghost_projection(in,
-                                [&](std::size_t, const auto& set)
-                                {
-                                    set.apply_op(samurai::variadic_projection(u));
-                                });
+        sites::ghost_projection<bench::SamuraiStatic>(in,
+                                                      [&](std::size_t, const auto& set)
+                                                      {
+                                                          set.apply_op(samurai::variadic_projection(u));
+                                                      });
         benchmark::DoNotOptimize(u.array().data());
     }
 }
@@ -133,11 +133,11 @@ static void BM_SiteOp_GhostPrediction(benchmark::State& state)
     constexpr std::size_t pred_order = mesh_t<dim>::config_t::prediction_stencil_radius;
     for (auto _ : state)
     {
-        sites::ghost_prediction(in,
-                                [&](std::size_t, const auto& set)
-                                {
-                                    set.apply_op(samurai::variadic_prediction<pred_order, false>(u));
-                                });
+        sites::ghost_prediction<bench::SamuraiStatic>(in,
+                                                      [&](std::size_t, const auto& set)
+                                                      {
+                                                          set.apply_op(samurai::variadic_prediction<pred_order, false>(u));
+                                                      });
         benchmark::DoNotOptimize(u.array().data());
     }
 }
@@ -150,11 +150,11 @@ static void BM_SiteOp_Detail(benchmark::State& state)
     auto detail    = samurai::make_scalar_field<double>("detail", u.mesh(), 0.);
     for (auto _ : state)
     {
-        sites::detail(in,
-                      [&](std::size_t, const auto& set)
-                      {
-                          set.apply_op(samurai::compute_detail(detail, u));
-                      });
+        sites::detail<bench::SamuraiStatic>(in,
+                                            [&](std::size_t, const auto& set)
+                                            {
+                                                set.apply_op(samurai::compute_detail(detail, u));
+                                            });
         benchmark::DoNotOptimize(detail.array().data());
     }
 }
@@ -169,12 +169,13 @@ static void BM_SiteOp_Tag(benchmark::State& state)
     auto tag       = samurai::make_scalar_field<std::uint8_t>("tag", mesh, std::uint8_t{0});
     for (auto _ : state)
     {
-        sites::tag(in,
-                   [&](std::size_t level, const auto& set)
-                   {
-                       const double eps_l = bench::mr_epsilon / static_cast<double>(1 << (dim * (mesh.max_level() - level - 1)));
-                       set.apply_op(samurai::mr_criteria(detail, tag, eps_l, 1. + dim));
-                   });
+        sites::tag<bench::SamuraiStatic>(in,
+                                         [&](std::size_t level, const auto& set)
+                                         {
+                                             const double eps_l = bench::mr_epsilon
+                                                                / static_cast<double>(1 << (dim * (mesh.max_level() - level - 1)));
+                                             set.apply_op(samurai::mr_criteria(detail, tag, eps_l, 1. + dim));
+                                         });
         benchmark::DoNotOptimize(tag.array().data());
     }
 }

@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -154,12 +155,14 @@ namespace bench
     inline constexpr int prediction_stencil_radius = 1;
 
     // Named after the MRMesh members they are copied from (make_site_inputs
-    // in mr_fixtures.hpp), with accessors where the mesh has one.
-    template <std::size_t dim>
+    // in mr_fixtures.hpp), with accessors where the mesh has one. CA holds one
+    // level cell array per level: samurai's CellArray in the files, a
+    // BackendCellArray for a backend with level cell arrays of its own.
+    template <std::size_t dim, class CA = samurai::CellArray<dim>>
     struct SiteInputs
     {
-        using ca_t  = samurai::CellArray<dim>;
-        using lca_t = typename ca_t::lca_type;
+        using ca_t  = CA;
+        using lca_t = std::decay_t<decltype(std::declval<const ca_t&>()[0])>;
 
         // mesh.min_level() and mesh.max_level(): the bounds of the mesh
         // configuration, not of the cells.
@@ -442,5 +445,123 @@ namespace bench
         }
         report_mesh(state, it->second.cells);
         return it->second;
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    // The sets of one mesh in the level cell arrays of a backend
+    //////////////////////////////////////////////////////////////////////
+
+    // The counterpart of samurai's CellArray for a backend B
+    // (set_algebra_backend.hpp): one B::lca_t<dim> per level, with the same
+    // levels and bounds.
+    template <class LCA>
+    class BackendCellArray
+    {
+      public:
+
+        BackendCellArray() = default;
+
+        BackendCellArray(std::vector<LCA> levels, std::size_t min_level, std::size_t max_level)
+            : m_levels(std::move(levels))
+            , m_min_level(min_level)
+            , m_max_level(max_level)
+        {
+        }
+
+        const LCA& operator[](std::size_t level) const
+        {
+            return m_levels[level];
+        }
+
+        std::size_t min_level() const
+        {
+            return m_min_level;
+        }
+
+        std::size_t max_level() const
+        {
+            return m_max_level;
+        }
+
+      private:
+
+        std::vector<LCA> m_levels;
+        std::size_t m_min_level = 0;
+        std::size_t m_max_level = 0;
+    };
+
+    // The inputs a backend reads: the samurai sets themselves when its level
+    // cell arrays are samurai's, a copy in its own otherwise.
+    template <class B, std::size_t dim>
+    using backend_inputs_t = std::conditional_t<std::is_same_v<typename B::template lca_t<dim>, typename SiteInputs<dim>::lca_t>,
+                                                SiteInputs<dim>,
+                                                SiteInputs<dim, BackendCellArray<typename B::template lca_t<dim>>>>;
+
+    // Copies lca into a level cell array of B, through its builder.
+    template <class B, std::size_t dim, class TInterval>
+    auto to_backend(const samurai::LevelCellArray<dim, TInterval>& lca)
+    {
+        auto builder = B::template builder<dim>(lca.level());
+        bench::for_each_interval(lca,
+                                 [&](std::size_t, const auto& i, const auto& index)
+                                 {
+                                     builder.add_interval(i, index);
+                                 });
+        return builder.build();
+    }
+
+    template <class B, std::size_t dim, class TInterval, std::size_t max_size>
+    auto to_backend(const samurai::CellArray<dim, TInterval, max_size>& ca)
+    {
+        std::vector<typename B::template lca_t<dim>> levels;
+        levels.reserve(max_size + 1);
+        for (std::size_t level = 0; level <= max_size; ++level)
+        {
+            levels.push_back(to_backend<B>(ca[level]));
+        }
+        return BackendCellArray<typename B::template lca_t<dim>>(std::move(levels), ca.min_level(), ca.max_level());
+    }
+
+    template <class B, std::size_t dim>
+    backend_inputs_t<B, dim> to_backend(const SiteInputs<dim>& in)
+    {
+        backend_inputs_t<B, dim> out;
+        out.min_level          = in.min_level;
+        out.max_level          = in.max_level;
+        out.graduation_width   = in.graduation_width;
+        out.max_stencil_radius = in.max_stencil_radius;
+        const auto cell_arrays = named_cell_arrays(in);
+        const auto out_arrays  = named_cell_arrays(out);
+        for (std::size_t k = 0; k < cell_arrays.size(); ++k)
+        {
+            *out_arrays[k].second = to_backend<B>(*cell_arrays[k].second);
+        }
+        for (const auto& corner : in.corners)
+        {
+            out.corners.push_back(to_backend<B>(corner));
+        }
+        return out;
+    }
+
+    // site_inputs() for backend B. The copy, if B needs one, is made once,
+    // outside the timed loop.
+    template <class B, std::size_t dim>
+    const backend_inputs_t<B, dim>& backend_inputs(benchmark::State& state, bool moved = false)
+    {
+        const auto& in = site_inputs<dim>(state, moved);
+        if constexpr (std::is_same_v<backend_inputs_t<B, dim>, SiteInputs<dim>>)
+        {
+            return in;
+        }
+        else
+        {
+            static std::map<const SiteInputs<dim>*, backend_inputs_t<B, dim>> cache;
+            auto it = cache.find(&in);
+            if (it == cache.end())
+            {
+                it = cache.emplace(&in, to_backend<B>(in)).first;
+            }
+            return it->second;
+        }
     }
 } // namespace bench

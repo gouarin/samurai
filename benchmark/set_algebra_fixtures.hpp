@@ -29,6 +29,8 @@
 #include <samurai/stencil.hpp>
 #include <samurai/subset/node.hpp>
 
+#include "set_algebra_backend.hpp"
+
 namespace bench
 {
     //////////////////////////////////////////////////////////////////////
@@ -56,16 +58,17 @@ namespace bench
     };
 
     // The callback consumes every interval: the compiler may otherwise drop
-    // the traversal of a lazy expression.
-    template <class Set>
+    // the traversal of a lazy expression. B is the backend of the set
+    // (set_algebra_backend.hpp).
+    template <class B = SamuraiStatic, class Set>
     Tally traverse(const Set& set)
     {
         Tally tally;
-        set(
-            [&tally](const auto& i, const auto& index)
-            {
-                tally(i, index);
-            });
+        Algebra<B>::traverse(set,
+                             [&tally](const auto& i, const auto& index)
+                             {
+                                 tally(i, index);
+                             });
         benchmark::DoNotOptimize(tally);
         return tally;
     }
@@ -108,9 +111,9 @@ namespace bench
         report(state, tally);
     }
 
-    // `site` passes each set it evaluates to f(level, set). Returns the number
-    // of sets of one iteration.
-    template <class Site>
+    // `site` passes each set it evaluates to f(level, set), a set of the
+    // backend B. Returns the number of sets of one iteration.
+    template <class B, class Site>
     std::size_t run_site(benchmark::State& state, Site&& site)
     {
         Tally tally;
@@ -122,7 +125,7 @@ namespace bench
             site(
                 [&](std::size_t, const auto& set)
                 {
-                    tally += traverse(set);
+                    tally += traverse<B>(set);
                     ++nsets;
                 });
         }

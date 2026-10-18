@@ -7,171 +7,28 @@
 // of generate_set_algebra_inputs. bench_set_library_ops times the same
 // operations with the library machinery.
 //
-// Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
-
-#include <cstddef>
-#include <utility>
+// The benchmarks are named <backend>/BM_Site_X<dim>/<args>, see
+// call_site_benchmarks.hpp. To compare another set algebra, register its
+// backend below (SET_ALGEBRA.md, "Adding a backend").
 
 #include <benchmark/benchmark.h>
 
-#include "set_algebra_fixtures.hpp"
-#include "set_call_sites.hpp"
+#include "call_site_benchmarks.hpp"
+#include "set_algebra_backend.hpp"
 #include "site_inputs.hpp"
 
 namespace
 {
-    template <class Site>
-    void run_site(benchmark::State& state, Site&& site)
+    template <class B>
+    bool register_backend()
     {
-        state.counters["sets"] = static_cast<double>(bench::run_site(state, std::forward<Site>(site)));
+        bench::register_call_sites<B, 1>(bench::mesh_args<1>);
+        bench::register_call_sites<B, 2>(bench::mesh_args<2>);
+        bench::register_call_sites<B, 3>(bench::mesh_args<3>);
+        return true;
     }
+
+    const bool registered = register_backend<bench::SamuraiStatic>();
 } // namespace
-
-namespace sites = bench::sites;
-
-// BM_Site_X traverses the sets of site X with a callback that only counts:
-// the time the set algebra takes in the library function, to set against
-// BM_SiteOp_X or BM_Op_* of bench_set_library_ops.
-template <std::size_t dim>
-static void BM_Site_MeshPredictionGhosts(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::mesh_prediction_ghosts(in, sites::projected_subdomain(in), f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_Corners(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::corners(in, f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_GhostProjection(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::ghost_projection(in, f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_GhostPrediction(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::ghost_prediction(in, f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_OuterGhosts(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::outer_ghosts(in, sites::projected_domain(in), f);
-             });
-}
-
-// BM_SiteCached_X: site X reading the coarse domain or subdomain the mesh
-// already stores instead of coarsening the finest one at every use. The gap
-// with BM_Site_X is what caching coarse sets would save.
-template <std::size_t dim>
-static void BM_SiteCached_OuterGhosts(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::outer_ghosts(in, sites::cached_domain(in), f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_SiteCached_MeshPredictionGhosts(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::mesh_prediction_ghosts(in, sites::cached_subdomain(in), f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_Detail(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::detail(in, f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_Tag(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::tag(in, f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_Interfaces(benchmark::State& state)
-{
-    const auto& in = bench::site_inputs<dim>(state);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::interfaces(in, f);
-             });
-}
-
-template <std::size_t dim>
-static void BM_Site_FieldTransfer(benchmark::State& state)
-{
-    const auto& in     = bench::site_inputs<dim>(state);
-    const auto& new_in = bench::site_inputs<dim>(state, true);
-    run_site(state,
-             [&](auto&& f)
-             {
-                 sites::field_transfer(in, new_in, f);
-             });
-}
-
-#define SAMURAI_BENCH_CALL_SITES(DIM)                                                 \
-    BENCHMARK(BM_Site_MeshPredictionGhosts<DIM>)->Apply(bench::mesh_args<DIM>);       \
-    BENCHMARK(BM_SiteCached_MeshPredictionGhosts<DIM>)->Apply(bench::mesh_args<DIM>); \
-    BENCHMARK(BM_Site_Corners<DIM>)->Apply(bench::mesh_args<DIM>);                    \
-    BENCHMARK(BM_Site_GhostProjection<DIM>)->Apply(bench::mesh_args<DIM>);            \
-    BENCHMARK(BM_Site_GhostPrediction<DIM>)->Apply(bench::mesh_args<DIM>);            \
-    BENCHMARK(BM_Site_OuterGhosts<DIM>)->Apply(bench::mesh_args<DIM>);                \
-    BENCHMARK(BM_SiteCached_OuterGhosts<DIM>)->Apply(bench::mesh_args<DIM>);          \
-    BENCHMARK(BM_Site_Detail<DIM>)->Apply(bench::mesh_args<DIM>);                     \
-    BENCHMARK(BM_Site_Tag<DIM>)->Apply(bench::mesh_args<DIM>);                        \
-    BENCHMARK(BM_Site_FieldTransfer<DIM>)->Apply(bench::mesh_args<DIM>);              \
-    BENCHMARK(BM_Site_Interfaces<DIM>)->Apply(bench::mesh_args<DIM>);
-
-SAMURAI_BENCH_CALL_SITES(1)
-SAMURAI_BENCH_CALL_SITES(2)
-SAMURAI_BENCH_CALL_SITES(3)
 
 BENCHMARK_MAIN();
