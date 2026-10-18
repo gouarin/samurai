@@ -56,34 +56,57 @@ namespace bench
         return (dim == 1) ? 16 : ((dim == 2) ? 10 : 7);
     }
 
-    // (max_level, number of balls) of each mesh: the mesh is refined to
-    // max_level along the surfaces of the balls, so more balls means more,
-    // smaller fronts.
-    template <std::size_t dim>
-    std::vector<std::array<long, 2>> mesh_cases()
+    // One adapted mesh, refined to max_level along the surfaces of nballs
+    // balls: more balls means more, smaller fronts. stencil_radius is the max
+    // stencil radius of the mesh configuration, which sets the ghost width.
+    // The benchmark arguments, in this order.
+    struct MeshCase
     {
-        const long max_level = static_cast<long>(default_max_level<dim>());
+        std::size_t max_level;
+        std::size_t nballs;
+        int stencil_radius;
+
+        auto key() const
+        {
+            return std::tuple{max_level, nballs, stencil_radius};
+        }
+    };
+
+    inline MeshCase mesh_case(const benchmark::State& state)
+    {
+        return {static_cast<std::size_t>(state.range(0)), static_cast<std::size_t>(state.range(1)), static_cast<int>(state.range(2))};
+    }
+
+    // Stencil radius 1 is the upwind scheme. The case of radius 3, the
+    // stencil of a WENO5 scheme, triples the ghost width.
+    template <std::size_t dim>
+    std::vector<MeshCase> mesh_cases()
+    {
+        constexpr std::size_t max_level = default_max_level<dim>();
         if constexpr (dim == 1)
         {
             // a 1D front is a point: many of them to get a non-trivial mesh
             return {
-                {max_level, 16 },
-                {max_level, 256}
+                {max_level, 16,  1},
+                {max_level, 256, 1},
+                {max_level, 256, 3}
             };
         }
         else if constexpr (dim == 2)
         {
             return {
-                {max_level,     1 },
-                {max_level,     16},
-                {max_level + 2, 16}
+                {max_level,     1,  1},
+                {max_level,     16, 1},
+                {max_level + 2, 16, 1},
+                {max_level,     16, 3}
             };
         }
         else
         {
             return {
-                {max_level, 1},
-                {max_level, 8}
+                {max_level, 1, 1},
+                {max_level, 8, 1},
+                {max_level, 8, 3}
             };
         }
     }
@@ -101,9 +124,9 @@ namespace bench
     template <std::size_t dim>
     void mesh_args(benchmark::internal::Benchmark* b)
     {
-        for (const auto& args : mesh_cases<dim>())
+        for (const auto& c : mesh_cases<dim>())
         {
-            b->Args({args[0], args[1]});
+            b->Args({static_cast<long>(c.max_level), static_cast<long>(c.nballs), c.stencil_radius});
         }
         b->Unit(benchmark::kMicrosecond);
     }
@@ -247,11 +270,11 @@ namespace bench
     }
 
     template <std::size_t dim>
-    std::filesystem::path inputs_file(std::size_t max_level, std::size_t nballs, bool moved)
+    std::filesystem::path inputs_file(const MeshCase& c, bool moved)
     {
         return inputs_dir()
-             / (std::to_string(dim) + "d_level" + std::to_string(max_level) + "_balls" + std::to_string(nballs) + (moved ? "_moved" : "")
-                + ".txt");
+             / (std::to_string(dim) + "d_level" + std::to_string(c.max_level) + "_balls" + std::to_string(c.nballs) + "_radius"
+                + std::to_string(c.stencil_radius) + (moved ? "_moved" : "") + ".txt");
     }
 
     // Set is a LevelCellArray or a CellArray.
@@ -401,15 +424,15 @@ namespace bench
     template <std::size_t dim>
     const SiteInputs<dim>& site_inputs(benchmark::State& state, bool moved = false)
     {
-        static std::map<std::tuple<std::size_t, std::size_t, bool>, SiteInputs<dim>> cache;
-        const auto max_level = static_cast<std::size_t>(state.range(0));
-        const auto nballs    = static_cast<std::size_t>(state.range(1));
-        auto it              = cache.find({max_level, nballs, moved});
+        static std::map<std::tuple<std::tuple<std::size_t, std::size_t, int>, bool>, SiteInputs<dim>> cache;
+        const auto c   = mesh_case(state);
+        const auto key = std::tuple{c.key(), moved};
+        auto it        = cache.find(key);
         if (it == cache.end())
         {
             try
             {
-                it = cache.emplace(std::tuple{max_level, nballs, moved}, read_site_inputs<dim>(inputs_file<dim>(max_level, nballs, moved))).first;
+                it = cache.emplace(key, read_site_inputs<dim>(inputs_file<dim>(c, moved))).first;
             }
             catch (const std::exception& e)
             {

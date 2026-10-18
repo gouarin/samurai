@@ -21,17 +21,15 @@ namespace
     template <std::size_t dim>
     void generate()
     {
-        for (const auto& args : bench::mesh_cases<dim>())
+        for (const auto& c : bench::mesh_cases<dim>())
         {
-            const auto max_level = static_cast<std::size_t>(args[0]);
-            const auto nballs    = static_cast<std::size_t>(args[1]);
             for (const bool moved : {false, true})
             {
-                const auto& mesh  = bench::adapted_case<dim>(max_level, nballs, moved).mesh;
+                const auto& mesh  = bench::adapted_case<dim>(c, moved).mesh;
                 auto in           = bench::make_site_inputs<dim>(mesh);
                 const auto shift  = (moved ? 2. : 1.) * bench::step_shift(mesh);
-                in.ungraded_cells = bench::cells_before_graduation<dim>(mesh, nballs, shift);
-                const auto path   = bench::inputs_file<dim>(max_level, nballs, moved);
+                in.ungraded_cells = bench::cells_before_graduation<dim>(mesh, c.nballs, shift);
+                const auto path   = bench::inputs_file<dim>(c, moved);
                 bench::write_site_inputs(in, path);
                 if (!(bench::read_site_inputs<dim>(path) == in))
                 {

@@ -34,14 +34,16 @@
 
 namespace bench
 {
+    // disable_minimal_ghost_width keeps the ghost width at stencil_radius: by
+    // default the mesh raises the max stencil radius to 2 (see SET_ALGEBRA.md).
     template <std::size_t dim>
-    auto mr_config(std::size_t max_level)
+    auto mr_config(std::size_t max_level, int stencil_radius)
     {
-        return samurai::mesh_config<dim>().min_level(2).max_level(max_level).max_stencil_size(2).disable_minimal_ghost_width();
+        return samurai::mesh_config<dim>().min_level(2).max_level(max_level).max_stencil_radius(stencil_radius).disable_minimal_ghost_width();
     }
 
     template <std::size_t dim>
-    using mr_mesh_t = decltype(samurai::mra::make_mesh(std::declval<samurai::Box<double, dim>>(), mr_config<dim>(4)));
+    using mr_mesh_t = decltype(samurai::mra::make_mesh(std::declval<samurai::Box<double, dim>>(), mr_config<dim>(4, 1)));
 
     template <std::size_t dim>
     using mr_field_t = decltype(samurai::make_scalar_field<double>("u", std::declval<mr_mesh_t<dim>&>()));
@@ -82,10 +84,10 @@ namespace bench
     }
 
     template <std::size_t dim>
-    mr_mesh_t<dim> make_unit_mesh(std::size_t max_level)
+    mr_mesh_t<dim> make_unit_mesh(std::size_t max_level, int stencil_radius)
     {
         return samurai::mra::make_mesh(samurai::Box<double, dim>(xt::zeros<double>({dim}), xt::ones<double>({dim})),
-                                       mr_config<dim>(max_level));
+                                       mr_config<dim>(max_level, stencil_radius));
     }
 
     template <std::size_t dim>
@@ -94,9 +96,9 @@ namespace bench
         mr_mesh_t<dim> mesh;
         mr_field_t<dim> u;
 
-        AdaptedCase(std::size_t max_level, std::size_t nballs, bool moved)
-            : mesh(make_unit_mesh<dim>(max_level))
-            , u(samurai::make_scalar_field<double>("u", mesh, balls_indicator<dim>(nballs, moved ? step_shift(mesh) : 0.)))
+        AdaptedCase(const MeshCase& c, bool moved)
+            : mesh(make_unit_mesh<dim>(c.max_level, c.stencil_radius))
+            , u(samurai::make_scalar_field<double>("u", mesh, balls_indicator<dim>(c.nballs, moved ? step_shift(mesh) : 0.)))
         {
             samurai::make_bc<samurai::Dirichlet<1>>(u, 0.);
             samurai::make_MRAdapt(u)(samurai::mra_config().epsilon(mr_epsilon));
@@ -109,13 +111,13 @@ namespace bench
     // Built once per binary and shared by its benchmarks. `moved` gives the
     // mesh of the next time step.
     template <std::size_t dim>
-    AdaptedCase<dim>& adapted_case(std::size_t max_level, std::size_t nballs, bool moved = false)
+    AdaptedCase<dim>& adapted_case(const MeshCase& c, bool moved = false)
     {
-        static std::map<std::tuple<std::size_t, std::size_t, bool>, std::unique_ptr<AdaptedCase<dim>>> cache;
-        auto& entry = cache[{max_level, nballs, moved}];
+        static std::map<std::tuple<std::tuple<std::size_t, std::size_t, int>, bool>, std::unique_ptr<AdaptedCase<dim>>> cache;
+        auto& entry = cache[{c.key(), moved}];
         if (!entry)
         {
-            entry = std::make_unique<AdaptedCase<dim>>(max_level, nballs, moved);
+            entry = std::make_unique<AdaptedCase<dim>>(c, moved);
         }
         return *entry;
     }

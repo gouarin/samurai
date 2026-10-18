@@ -126,11 +126,12 @@ static void BM_Interfaces_dynamic(benchmark::State& state)
 
 namespace
 {
-    // One of bench::mesh_cases: the most fronts at the default max level.
+    // One of bench::mesh_cases: the most fronts at the default max level,
+    // stencil radius 1.
     template <std::size_t dim>
     void mesh_args(benchmark::internal::Benchmark* b)
     {
-        b->Args({static_cast<long>(bench::default_max_level<dim>()), (dim == 2) ? 16 : 8});
+        b->Args({static_cast<long>(bench::default_max_level<dim>()), (dim == 2) ? 16 : 8, 1});
         b->Unit(benchmark::kMicrosecond);
     }
 } // namespace

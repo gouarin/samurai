@@ -7,7 +7,7 @@
 // bench_set_call_sites, so that BM_Site_X / BM_SiteOp_X is the share of the
 // set algebra in the function that evaluates X.
 //
-// Args: (max_level, number of balls), see bench::mesh_cases.
+// Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
 
 #include <cstddef>
 #include <cstdint>
@@ -41,7 +41,7 @@ namespace
     template <std::size_t dim>
     bench::AdaptedCase<dim>& get_case(benchmark::State& state, bool moved = false)
     {
-        auto& c = bench::adapted_case<dim>(static_cast<std::size_t>(state.range(0)), static_cast<std::size_t>(state.range(1)), moved);
+        auto& c = bench::adapted_case<dim>(bench::mesh_case(state), moved);
         bench::report_mesh(state, c.mesh);
         return c;
     }
@@ -51,12 +51,13 @@ namespace
     template <std::size_t dim>
     const bench::SiteInputs<dim>& get_inputs(benchmark::State& state)
     {
-        static std::map<std::pair<long, long>, bench::SiteInputs<dim>> cache;
+        static std::map<std::tuple<std::size_t, std::size_t, int>, bench::SiteInputs<dim>> cache;
         const auto& mesh = get_case<dim>(state).mesh;
-        auto it          = cache.find({state.range(0), state.range(1)});
+        const auto key   = bench::mesh_case(state).key();
+        auto it          = cache.find(key);
         if (it == cache.end())
         {
-            it = cache.emplace(std::pair{state.range(0), state.range(1)}, bench::make_site_inputs<dim>(mesh)).first;
+            it = cache.emplace(key, bench::make_site_inputs<dim>(mesh)).first;
         }
         return it->second;
     }
@@ -210,10 +211,9 @@ static void BM_Op_AdaptStep(benchmark::State& state)
     {
         state.PauseTiming();
         auto mesh = c.mesh;
-        auto u    = samurai::make_scalar_field<double>(
-            "u",
-            mesh,
-            bench::balls_indicator<dim>(static_cast<std::size_t>(state.range(1)), bench::step_shift(mesh)));
+        auto u    = samurai::make_scalar_field<double>("u",
+                                                    mesh,
+                                                    bench::balls_indicator<dim>(bench::mesh_case(state).nballs, bench::step_shift(mesh)));
         samurai::make_bc<samurai::Dirichlet<1>>(u, 0.);
         auto adapt = samurai::make_MRAdapt(u);
         state.ResumeTiming();

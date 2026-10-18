@@ -53,6 +53,44 @@ if the algebra is optimized or replaced. Their inputs come from three headers:
 balls, and copies their sets into `SiteInputs`. Only
 `generate_set_algebra_inputs` and `bench_set_library_ops` include it.
 
+## Meshes
+
+The benchmarks on adapted meshes take three arguments, `max_level`, the number
+of balls and the max stencil radius: `BM_Site_Tag<3>/7/8/1` runs on the 3D
+mesh of max level 7 refined around 8 balls, with a max stencil radius of 1.
+`bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
+
+| Dimension | Max level | Balls | Max stencil radius | Leaves |
+| --- | ---: | ---: | ---: | ---: |
+| 1D | 16 | 16 | 1 | 958 |
+| 1D | 16 | 256 | 1 | 6,614 |
+| 1D | 16 | 256 | 3 | 6,618 |
+| 2D | 10 | 1 | 1 | 25,594 |
+| 2D | 10 | 16 | 1 | 54,733 |
+| 2D | 12 | 16 | 1 | 235,309 |
+| 2D | 10 | 16 | 3 | 54,865 |
+| 3D | 7 | 1 | 1 | 135,640 |
+| 3D | 7 | 8 | 1 | 197,884 |
+| 3D | 7 | 8 | 3 | 206,900 |
+
+`mr_config` (`mr_fixtures.hpp`) builds every mesh with min level 2, the default
+graduation width (1) and prediction stencil radius (1), and two settings that
+change the sets:
+
+- `max_stencil_radius(r)`: the widest stencil a scheme reads on the mesh, 1
+  for an upwind scheme, 3 for a WENO5 scheme.
+- `disable_minimal_ghost_width()`: without it, the mesh raises the max stencil
+  radius to at least 2 (`mesh_config::parse_args`), so a radius of 1 could not
+  be measured.
+
+The ghost width is the larger of the max stencil radius and the prediction
+stencil radius, so it is 1 or 3 here. It sets the size of `cells_and_ghosts`
+and `reference`, which nearly every call site reads, and the max stencil radius
+also decides the path of `make_graduation`: above 1, it extends the cells along
+the boundary of the domain. The fronts are moved by 4 cells of the finest
+level between two time steps, and adapted with `epsilon = 1e-3` and a
+Dirichlet boundary condition.
+
 | Binary | Needs | Question |
 | --- | --- | --- |
 | `bench_set_operators` | algebra | Cost of the operators at one level: the floor of a traversal against a raw loop, the arity of intersection and union (with in-phase operands and nested binary operators as controls), and the expansion width. |

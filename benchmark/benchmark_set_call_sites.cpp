@@ -7,7 +7,7 @@
 // of generate_set_algebra_inputs. bench_set_library_ops times the same
 // operations with the library machinery.
 //
-// Args: (max_level, number of balls), see bench::mesh_cases.
+// Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
 
 #include <cstddef>
 #include <utility>
