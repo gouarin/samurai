@@ -45,7 +45,7 @@ level is the first argument of every benchmark, so a filter selects one curve:
 cmake -S . -B build -DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON
 ninja -C build bench_set_operators bench_set_call_sites
 ./build/benchmark/bench_set_operators --benchmark_filter='BM_Self<2, Shape::shell>/'
-./build/benchmark/bench_set_call_sites --benchmark_filter='^static/BM_Site_Tag<3>/[0-9]+/8/1$'
+./build/benchmark/bench_set_call_sites --benchmark_filter='^static/BM_Site_Tag<3>/[0-9]+/8/1/0$'
 ```
 
 Each point reports the intervals of its input (`in_itv` for a synthetic set,
@@ -93,7 +93,7 @@ balls, and copies their sets into `SiteInputs`. Only
 | `bench_set_projection` | algebra | Cost of `.on()`: coarsening against the level difference, compared with the same coarse set already built and with building it once; refinement as a control; coarsening of an N-ary intersection, of a chained projection and inside an expansion. |
 | `bench_set_mesh_shape` | algebra | Effect of the shape of a level: the same cells cut into K stripes along each axis, and the same front cut into P subdomains along each axis. |
 | `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step or mesh construction, copied from their source (`BM_Site_*`), two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`), and the ways to consume a set (`BM_Mode_*`), for each registered backend. |
-| `bench_dynamic_set` | algebra, input files | The same sites with the `static` and `dynamic` backends, on one 2D and one 3D mesh: the price of the runtime algebra. |
+| `bench_dynamic_set` | algebra, input files | The same sites with the `static` and `dynamic` backends, on the main 2D and 3D meshes, in the box and with a hole: the price of the runtime algebra. |
 | `bench_set_graduation` | algebra, `make_graduation`, input files | Cost of `make_graduation` on the cells the adaptation passes to it, before graduation. It reports the cells before (`cells_in`) and after (`cells_out`). |
 | `bench_set_library_ops` | mesh, MR adaptation, fields, schemes | The sets of `BM_Site_*` with the library's field operator (`BM_SiteOp_*`), and the library operations themselves (`BM_Op_*`), on the meshes and arguments of `bench_set_call_sites`. |
 
@@ -112,9 +112,11 @@ phases, read from samurai's timers, in ms per iteration.
 
 The library usages of the set algebra and the benchmark that measures them.
 Each site was checked once against the library on the meshes of
-`mesh_cases`, in 1D, 2D and 3D: the level cell arrays it builds are equal to
-those of the mesh, and the boundary condition sites hold exactly the ghosts
-the library writes.
+`mesh_cases`, in 1D, 2D and 3D, on the box and on the domain with a hole: the
+level cell arrays it builds are equal to those of the mesh, and the outer
+ghost and boundary condition sites hold exactly the ghosts the library
+writes (`project_corner_below` writes a subset of its sets: it skips a
+coarse ghost whose corner-most child is not in the mesh).
 
 | Library usage | Source | Benchmark |
 | --- | --- | --- |
@@ -127,7 +129,7 @@ the library writes.
 | `update_cell_array_from_tag`, its set expression | `algorithm/graduation.hpp:844-850` | `BM_Site_CellArrayFromTag` |
 | `make_graduation` | `algorithm/graduation.hpp` | `BM_Graduation` |
 | `update_ghost_mr`: projection and prediction of the ghosts | `algorithm/update_ghost_mr.hpp` | `BM_Site_GhostProjection`, `BM_Site_GhostPrediction` |
-| `update_outer_ghosts`: `project_bc`, `predict_bc`, `project_corner_below` | `algorithm/update_outer_ghost.hpp` | `BM_Site_OuterGhosts` |
+| `update_outer_ghosts`: `project_bc`, `predict_bc`, `project_corner_below`, with their branches for a domain that is not a box | `algorithm/update_outer_ghost.hpp:23-61`, `197-230`, `270-338` | `BM_Site_OuterGhosts` |
 | `project_bc`: the children of each projection ghost, one expression per ghost | `algorithm/update_outer_ghost.hpp:75-153` | `BM_Site_PerCellChildren` |
 | `apply_bc_impl` (region at the finest level) | `bc/apply_field_bc.hpp:121-124` | `BM_Site_BcCells` |
 | `update_outer_corners_by_polynomial_extrapolation` | `bc/apply_field_bc.hpp:517` | `BM_Site_BcCorners` |
@@ -160,8 +162,7 @@ same cells:
 Not covered yet: the periodic ghosts and directions, the MPI exchanges and
 neighbour subdomains (including `construct_subdomain` and the diffusion load
 balancer, which builds a `CellArray` per coarse cell,
-`load_balancing/strategies/diffusion.hpp:446-500`), domains with holes, and
-the sweep over the max level. `MROMesh::update_sub_mesh_impl`
+`load_balancing/strategies/diffusion.hpp:446-500`). `MROMesh::update_sub_mesh_impl`
 (`mr/mesh_with_overleaves.hpp`) is not measured: its constructors call
 `Mesh_base` constructors that no longer exist, so it does not compile, and
 only the legacy LBM demos, which are not built, use it.
@@ -209,24 +210,41 @@ traverse the set or `materialize` it.
 
 ## Meshes
 
-The benchmarks on adapted meshes take three arguments, `max_level`, the number
-of balls and the max stencil radius: `static/BM_Site_Tag<3>/7/8/1` runs the
-static backend on the 3D mesh of max level 7 refined around 8 balls, with a
-max stencil radius of 1.
-`bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
+The benchmarks on adapted meshes take four arguments, `max_level`, the number
+of balls, the max stencil radius and the geometry (`bench::Geometry`: 0 for
+the unit box, 1 for the unit box with a hole):
+`static/BM_Site_Tag<3>/7/8/1/0` runs the static backend on the 3D mesh of
+max level 7 refined around 8 balls in the unit box, with a max stencil radius
+of 1. `bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
 
-| Dimension | Max level | Balls | Max stencil radius | Leaves |
-| --- | ---: | ---: | ---: | ---: |
-| 1D | 16 | 16 | 1 | 958 |
-| 1D | 16 | 256 | 1 | 6,614 |
-| 1D | 16 | 256 | 3 | 6,618 |
-| 2D | 10 | 1 | 1 | 25,594 |
-| 2D | 10 | 16 | 1 | 54,733 |
-| 2D | 12 | 16 | 1 | 235,309 |
-| 2D | 10 | 16 | 3 | 54,865 |
-| 3D | 7 | 1 | 1 | 135,640 |
-| 3D | 7 | 8 | 1 | 197,884 |
-| 3D | 7 | 8 | 3 | 206,900 |
+| Dimension | Max level | Balls | Max stencil radius | Geometry | Leaves |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 1D | 16 | 16 | 1 | box | 958 |
+| 1D | 16 | 256 | 1 | box | 6,614 |
+| 1D | 16 | 256 | 3 | box | 6,618 |
+| 1D | 14 | 256 | 1 | hole | 3,138 |
+| 2D | 10 | 1 | 1 | box | 25,594 |
+| 2D | 10 | 16 | 1 | box | 54,733 |
+| 2D | 12 | 16 | 1 | box | 235,309 |
+| 2D | 10 | 16 | 3 | box | 54,865 |
+| 2D | 8 | 16 | 1 | hole | 47,898 |
+| 3D | 7 | 1 | 1 | box | 135,640 |
+| 3D | 7 | 8 | 1 | box | 197,884 |
+| 3D | 7 | 8 | 3 | box | 206,900 |
+| 3D | 5 | 8 | 1 | hole | 192,619 |
+
+The domain with a hole is built as in
+`demos/FiniteVolume/linear_convection_obstacle.cpp`: the unit box, from which
+`DomainBuilder::remove` takes the box [0.5, 0.75)^dim. Its boundary has the
+faces of the hole, so the outer ghost and boundary condition sites handle
+more ghosts (2D: 530 boundary cells in `BM_Site_BcCells` against 90 on the
+box, 487 projection ghosts against 74), and the library takes the branches
+of `project_bc` and `predict_bc` for a domain that is not a box: each call
+builds one more `LevelCellArray`, the outer layer in every direction. The
+hole has no convex corner, so the corners are those of the box. DomainBuilder
+gives this domain a scaling factor of 1/4, the largest length that divides
+its boxes: at max level L the mesh has the resolution of the unit box at
+L + 2, hence its max level of 2 below the main mesh of its dimension.
 
 With the sweep, `bench::sweep_cases` adds one mesh per max level, with a
 max stencil radius of 1 and the balls of the main mesh of each dimension:

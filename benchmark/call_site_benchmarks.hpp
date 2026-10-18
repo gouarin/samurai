@@ -7,7 +7,8 @@
 // <B::name>/BM_Site_X<dim> and <B::name>/BM_Mode_X<dim>, so that
 // --benchmark_filter='^<name>/' selects the backend.
 //
-// Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
+// Args: (max_level, number of balls, stencil radius, geometry), see
+// bench::mesh_cases.
 
 #pragma once
 
@@ -15,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <benchmark/benchmark.h>
 
@@ -319,11 +321,11 @@ namespace bench
         }
     } // namespace call_sites
 
-    // `args` gives the meshes, as mesh_args<dim> does. Registers the sites
-    // for which keep(name) holds, all of them by default.
-    template <class B, std::size_t dim, class Args, class Keep = bool (*)(std::string_view)>
+    // Registers the sites for which keep(name) holds, all of them by
+    // default, on the meshes of `cases`.
+    template <class B, std::size_t dim, class Keep = bool (*)(std::string_view)>
     void register_call_sites(
-        Args&& args,
+        const std::vector<MeshCase>& cases,
         Keep&& keep =
             [](std::string_view)
         {
@@ -337,7 +339,7 @@ namespace bench
                 return;
             }
             const std::string name = std::string(B::name) + "/" + site + "<" + std::to_string(dim) + ">";
-            benchmark::RegisterBenchmark(name, bm)->Apply(args);
+            mesh_args(benchmark::RegisterBenchmark(name, bm), cases);
         };
         add("BM_Site_MeshPredictionGhosts", call_sites::MeshPredictionGhosts<B, dim>);
         add("BM_SiteCached_MeshPredictionGhosts", call_sites::CachedMeshPredictionGhosts<B, dim>);

@@ -175,17 +175,76 @@ namespace bench::sites
         return outer_boundary.build();
     }
 
-    // update_outer_ghosts (algorithm/update_outer_ghost.hpp) without the
-    // boundary condition itself: project_corner_below, project_bc and
-    // predict_bc, with one layer of boundary ghosts (Dirichlet). predict_bc
-    // builds a LevelCellArray (domain_boundary_outer_layer) on every call.
+    // domain_boundary_outer_layer(mesh, level, layer_width) (boundary.hpp:51-75):
+    // the outer layers of every Cartesian direction, in one LevelCellList.
+    template <class B, std::size_t dim, class CA>
+    auto domain_boundary_outer_layer(const SiteInputs<dim, CA>& in, std::size_t level, int layer_width)
+    {
+        using A             = Algebra<B>;
+        auto domain         = A::lift(in.domain(level));
+        auto outer_boundary = A::template builder<dim>(level);
+        samurai::for_each_cartesian_direction<dim>(
+            [&](const auto& direction)
+            {
+                auto inner_boundary = domain_boundary<B>(in, level, direction);
+                for (int layer = 1; layer <= layer_width; ++layer)
+                {
+                    A::traverse(A::difference(A::translate(inner_boundary, layer * direction), domain),
+                                [&](const auto& i, const auto& index)
+                                {
+                                    outer_boundary.add_interval(i, index);
+                                });
+                }
+            });
+        return outer_boundary.build();
+    }
+
+    // The ghosts of the Dirichlet condition of the adapted meshes, and
+    // max_coarse_layer of update_outer_ghosts: one layer.
+    inline constexpr int n_bc_ghosts = 1;
+
+    // The projection ghosts project_bc(proj_level, direction, layer = 1,
+    // field) fills (algorithm/update_outer_ghost.hpp:23-61): those outside
+    // the domain, and on a domain that is not a box, those not filled by the
+    // boundary condition of another direction, through a LevelCellArray
+    // built at every call (domain_boundary_outer_layer). Passes the set to
+    // g(proj_level, set).
+    template <class B, std::size_t dim, class CA, class Domain, class G>
+    void projection_bc_ghosts(const SiteInputs<dim, CA>& in,
+                              std::size_t proj_level,
+                              const Domain& domain,
+                              const samurai::DirectionVector<dim>& direction,
+                              G&& g)
+    {
+        using A                = Algebra<B>;
+        constexpr int layer    = 1;
+        const auto& inner      = in.union_[proj_level];
+        auto outside_layer     = A::difference(A::translate(inner, layer * direction), A::translate(domain, (layer - 1) * direction));
+        auto projection_ghosts = A::on(A::intersection(outside_layer, in.reference[proj_level]), proj_level);
+        if (in.domain_is_box)
+        {
+            g(proj_level, projection_ghosts);
+        }
+        else
+        {
+            const auto bc_ghosts_in_other_directions = domain_boundary_outer_layer<B>(in, proj_level, n_bc_ghosts);
+            g(proj_level, A::difference(projection_ghosts, bc_ghosts_in_other_directions));
+        }
+    }
+
+    // update_outer_ghosts(level, field) (algorithm/update_outer_ghost.hpp:341)
+    // without the boundary condition itself: project_corner_below,
+    // project_bc and predict_bc, with one layer of boundary ghosts
+    // (Dirichlet). predict_bc builds a LevelCellArray
+    // (domain_boundary_outer_layer) on every call, and two on a domain that
+    // is not a box. update_ghost_mr calls it for every level from max_level
+    // down to 0 (update_ghost_mr.hpp:204-208): project_bc runs below the min
+    // level too.
     template <class B, std::size_t dim, class CA, class DomainAt, class F>
     void outer_ghosts(const SiteInputs<dim, CA>& in, DomainAt&& domain_at, F&& f)
     {
-        using A                        = Algebra<B>;
-        constexpr int n_bc_ghosts      = 1;
-        const std::size_t lowest_level = in.min_level > 0 ? in.min_level - 1 : 0;
-        for (std::size_t level = in.max_level + 1; level-- > lowest_level;)
+        using A = Algebra<B>;
+        for (std::size_t level = in.max_level + 1; level-- > 0;)
         {
             if constexpr (dim > 1)
             {
@@ -208,13 +267,22 @@ namespace bench::sites
                 {
                     if (level < in.max_level)
                     {
-                        auto outside_layer = A::difference(A::translate(in.union_[level], direction), domain_at(level));
-                        f(level, A::on(A::intersection(outside_layer, in.reference[level]), level));
+                        projection_bc_ghosts<B>(in, level, domain_at(level), direction, f);
                     }
                     if (level < in.max_level && level >= in.min_level)
                     {
-                        auto bc_ghosts = domain_boundary_outer_layer<B>(in, level, direction, n_bc_ghosts);
-                        f(level + 1, A::on(A::intersection(bc_ghosts, in.reference[level + 1]), level + 1));
+                        // predict_bc(level + 1, direction, field) (update_outer_ghost.hpp:197-230)
+                        const auto bc_ghosts           = domain_boundary_outer_layer<B>(in, level, direction, n_bc_ghosts);
+                        auto outside_prediction_ghosts = A::on(A::intersection(bc_ghosts, in.reference[level + 1]), level + 1);
+                        if (in.domain_is_box)
+                        {
+                            f(level + 1, outside_prediction_ghosts);
+                        }
+                        else
+                        {
+                            const auto bc_ghosts_in_other_directions = domain_boundary_outer_layer<B>(in, level + 1, n_bc_ghosts);
+                            f(level + 1, A::difference(outside_prediction_ghosts, bc_ghosts_in_other_directions));
+                        }
                     }
                 });
         }
@@ -878,30 +946,30 @@ namespace bench::sites
 
     // project_bc(proj_level, direction, layer, field) and project_bc(subset,
     // ...) (algorithm/update_outer_ghost.hpp:22-153), with one layer of
-    // boundary ghosts on a box: for every projection ghost, the set of its
-    // children one level up, or two when there are none. One expression per
-    // ghost cell, at every ghost update. projection_ghosts is the set of
-    // BM_Site_OuterGhosts: it is traversed here but not counted.
+    // boundary ghosts: for every projection ghost, the set of its children
+    // one level up, or two when there are none. One expression per ghost
+    // cell, at every ghost update, for every level from max_level - 1 down to
+    // 0 (see outer_ghosts). The projection ghosts are the set of
+    // BM_Site_OuterGhosts: traversed here but not counted.
     template <class B, std::size_t dim, class CA, class F>
     void per_cell_children(const SiteInputs<dim, CA>& in, F&& f)
     {
-        using A                        = Algebra<B>;
-        constexpr int layer            = 1;
-        const std::size_t lowest_level = in.min_level > 0 ? in.min_level - 1 : 0;
-        for (std::size_t proj_level = in.max_level + 1; proj_level-- > lowest_level;)
+        using A = Algebra<B>;
+        for (std::size_t proj_level = in.max_level; proj_level-- > 0;)
         {
-            if (proj_level >= in.max_level)
-            {
-                continue;
-            }
             samurai::for_each_cartesian_direction<dim>(
                 [&](const auto& direction)
                 {
-                    auto domain       = A::on(in.domain(), proj_level);
-                    const auto& inner = in.union_[proj_level];
-                    auto outside_layer = A::difference(A::translate(inner, layer * direction), A::translate(domain, (layer - 1) * direction));
-                    auto projection_ghosts = A::on(A::intersection(outside_layer, in.reference[proj_level]), proj_level);
-                    A::traverse(projection_ghosts,
+                    auto domain = A::on(in.domain(), proj_level);
+                    projection_bc_ghosts<B>(
+                        in,
+                        proj_level,
+                        domain,
+                        direction,
+                        [&](std::size_t, const auto& projection_ghosts)
+                        {
+                            A::traverse(
+                                projection_ghosts,
                                 [&](const auto& i, const auto& index)
                                 {
                                     const auto yz = to_index<dim>(index);
@@ -919,28 +987,9 @@ namespace bench::sites
                                         }
                                     }
                                 });
+                        });
                 });
         }
-    }
-
-    // domain_boundary_outer_layer(mesh, level, layer_width) (boundary.hpp:51-75):
-    // the outer layers of every Cartesian direction, in one LevelCellList.
-    template <class B, std::size_t dim, class CA>
-    auto domain_boundary_outer_layer(const SiteInputs<dim, CA>& in, std::size_t level, int layer_width)
-    {
-        using A             = Algebra<B>;
-        auto domain         = A::lift(in.domain(level));
-        auto outer_boundary = A::template builder<dim>(level);
-        samurai::for_each_cartesian_direction<dim>(
-            [&](const auto& direction)
-            {
-                auto inner_boundary = domain_boundary<B>(in, level, direction);
-                for (int layer = 1; layer <= layer_width; ++layer)
-                {
-                    A::traverse(A::difference(A::translate(inner_boundary, layer * direction), domain), add_to<dim>(outer_boundary));
-                }
-            });
-        return outer_boundary.build();
     }
 
     // The ghosts compute_cell_ownership (petsc/compute_cell_ownership.hpp)

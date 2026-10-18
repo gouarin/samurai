@@ -8,7 +8,8 @@
 // materialized sets, so its whole time is set algebra and the building of
 // LevelCellArrays.
 //
-// Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
+// Args: (max_level, number of balls, stencil radius, geometry), see
+// bench::mesh_cases.
 
 #include <array>
 #include <cstddef>

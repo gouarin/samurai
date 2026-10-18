@@ -22,9 +22,9 @@ namespace
     template <class B>
     bool register_backend()
     {
-        bench::register_call_sites<B, 1>(bench::mesh_args<1>);
-        bench::register_call_sites<B, 2>(bench::mesh_args<2>);
-        bench::register_call_sites<B, 3>(bench::mesh_args<3>);
+        bench::register_call_sites<B, 1>(bench::mesh_cases<1>());
+        bench::register_call_sites<B, 2>(bench::mesh_cases<2>());
+        bench::register_call_sites<B, 3>(bench::mesh_cases<3>());
         return true;
     }
 

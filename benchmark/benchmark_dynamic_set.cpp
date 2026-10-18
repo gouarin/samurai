@@ -3,7 +3,7 @@
 
 // Price of the dynamic set algebra (include/samurai/subset/dynamic/) against
 // the static one: the call sites of bench_set_call_sites with both backends,
-// on one 2D and one 3D mesh of bench::mesh_cases. Each site builds its
+// on two 2D and two 3D meshes of bench::mesh_cases. Each site builds its
 // expressions inside the timed loop, as the library does, so the dynamic
 // figure includes the construction of their heap-allocated nodes. The ratio
 // dynamic/BM_Site_X / static/BM_Site_X is the price of the runtime tree.
@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <string_view>
+#include <vector>
 
 #include <benchmark/benchmark.h>
 
@@ -22,12 +23,16 @@
 
 namespace
 {
-    // The most fronts at the default max level, stencil radius 1.
+    // The most fronts at the default max level, stencil radius 1, and the
+    // mesh of the same fronts on the domain with a hole.
     template <std::size_t dim>
-    void mesh_args(benchmark::internal::Benchmark* b)
+    std::vector<bench::MeshCase> mesh_cases()
     {
-        b->Args({static_cast<long>(bench::default_max_level<dim>()), (dim == 2) ? 16 : 8, 1});
-        b->Unit(benchmark::kMicrosecond);
+        constexpr std::size_t nballs = (dim == 2) ? 16 : 8;
+        return {
+            {bench::default_max_level<dim>(), nballs, 1},
+            {bench::default_max_level<dim>() - 2, nballs, 1, bench::Geometry::hole}
+        };
     }
 
     // Without the sites the dynamic algebra gets wrong. On 2026-10-18:
@@ -52,8 +57,8 @@ namespace
     template <class B>
     bool register_backend()
     {
-        bench::register_call_sites<B, 2>(mesh_args<2>, keep);
-        bench::register_call_sites<B, 3>(mesh_args<3>, keep);
+        bench::register_call_sites<B, 2>(mesh_cases<2>(), keep);
+        bench::register_call_sites<B, 3>(mesh_cases<3>(), keep);
         return true;
     }
 

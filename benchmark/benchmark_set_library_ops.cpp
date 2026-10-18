@@ -7,7 +7,8 @@
 // bench_set_call_sites, so that BM_Site_X / BM_SiteOp_X is the share of the
 // set algebra in the function that evaluates X.
 //
-// Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
+// Args: (max_level, number of balls, stencil radius, geometry), see
+// bench::mesh_cases.
 
 #include <cstddef>
 #include <cstdint>
@@ -51,7 +52,7 @@ namespace
     template <std::size_t dim>
     const bench::SiteInputs<dim>& get_inputs(benchmark::State& state)
     {
-        static std::map<std::tuple<std::size_t, std::size_t, int>, bench::SiteInputs<dim>> cache;
+        static std::map<bench::mesh_key_t, bench::SiteInputs<dim>> cache;
         const auto& mesh = get_case<dim>(state).mesh;
         const auto key   = bench::mesh_case(state).key();
         auto it          = cache.find(key);
