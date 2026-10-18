@@ -70,6 +70,22 @@ namespace bench
         return tally;
     }
 
+    // The intervals of a LevelCellArray, with their level and (y, z): the
+    // loop of samurai::for_each_interval (algorithm.hpp), which pulls the
+    // mesh and the OpenMP loops.
+    template <std::size_t dim, class TInterval, class F>
+    void for_each_interval(const samurai::LevelCellArray<dim, TInterval>& lca, F&& f)
+    {
+        if (lca.empty())
+        {
+            return;
+        }
+        for (auto it = lca.cbegin(); it != lca.cend(); ++it)
+        {
+            f(lca.level(), *it, it.index());
+        }
+    }
+
     // `t/itv`, the time per emitted interval, is the figure to compare across
     // shapes, operators and dimensions.
     inline void report(benchmark::State& state, const Tally& tally)

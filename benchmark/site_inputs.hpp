@@ -32,12 +32,13 @@
 
 #include <benchmark/benchmark.h>
 
-#include <samurai/algorithm.hpp>
 #include <samurai/cell_array.hpp>
 #include <samurai/cell_list.hpp>
 #include <samurai/level_cell_array.hpp>
 #include <samurai/level_cell_list.hpp>
 #include <samurai/stencil.hpp>
+
+#include "set_algebra_fixtures.hpp"
 
 #ifndef SAMURAI_SET_ALGEBRA_INPUTS_DIR
 #define SAMURAI_SET_ALGEBRA_INPUTS_DIR "set_algebra_inputs"
@@ -87,6 +88,16 @@ namespace bench
         }
     }
 
+    // The intervals of a CellArray, level by level.
+    template <std::size_t dim, class TInterval, std::size_t max_size, class F>
+    void for_each_interval(const samurai::CellArray<dim, TInterval, max_size>& ca, F&& f)
+    {
+        for (std::size_t level = ca.min_level(); level <= ca.max_level(); ++level)
+        {
+            bench::for_each_interval(ca[level], f);
+        }
+    }
+
     template <std::size_t dim>
     void mesh_args(benchmark::internal::Benchmark* b)
     {
@@ -102,11 +113,11 @@ namespace bench
     void report_mesh(benchmark::State& state, const samurai::CellArray<dim>& cells)
     {
         std::size_t intervals = 0;
-        samurai::for_each_interval(cells,
-                                   [&](std::size_t, const auto&, const auto&)
-                                   {
-                                       ++intervals;
-                                   });
+        bench::for_each_interval(cells,
+                                 [&](std::size_t, const auto&, const auto&)
+                                 {
+                                     ++intervals;
+                                 });
         state.counters["leaves"]   = static_cast<double>(cells.nb_cells());
         state.counters["leaf_itv"] = static_cast<double>(intervals);
         state.counters["levels"]   = static_cast<double>(cells.max_level() - cells.min_level() + 1);
@@ -247,20 +258,20 @@ namespace bench
     template <class Set>
     void write_intervals(std::ostream& out, const Set& set, bool with_level)
     {
-        samurai::for_each_interval(set,
-                                   [&](std::size_t level, const auto& i, const auto& index)
-                                   {
-                                       if (with_level)
-                                       {
-                                           out << level << ' ';
-                                       }
-                                       out << i.start << ' ' << i.end;
-                                       for (const auto& y : index)
-                                       {
-                                           out << ' ' << y;
-                                       }
-                                       out << '\n';
-                                   });
+        bench::for_each_interval(set,
+                                 [&](std::size_t level, const auto& i, const auto& index)
+                                 {
+                                     if (with_level)
+                                     {
+                                         out << level << ' ';
+                                     }
+                                     out << i.start << ' ' << i.end;
+                                     for (const auto& y : index)
+                                     {
+                                         out << ' ' << y;
+                                     }
+                                     out << '\n';
+                                 });
     }
 
     template <std::size_t dim>
@@ -273,11 +284,11 @@ namespace bench
         for (const auto& [name, ca] : named_cell_arrays(in))
         {
             std::size_t n = 0;
-            samurai::for_each_interval(*ca,
-                                       [&n](std::size_t, const auto&, const auto&)
-                                       {
-                                           ++n;
-                                       });
+            bench::for_each_interval(*ca,
+                                     [&n](std::size_t, const auto&, const auto&)
+                                     {
+                                         ++n;
+                                     });
             out << "ca " << name << ' ' << n << '\n';
             write_intervals(out, *ca, true);
         }

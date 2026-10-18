@@ -14,8 +14,6 @@
 
 #include <benchmark/benchmark.h>
 
-#include <samurai/algorithm.hpp>
-
 #include "set_algebra_fixtures.hpp"
 
 namespace
@@ -117,11 +115,11 @@ static void BM_RawLoop(benchmark::State& state)
     for (auto _ : state)
     {
         tally = {};
-        samurai::for_each_interval(lca,
-                                   [&](std::size_t, const auto& i, const auto& index)
-                                   {
-                                       tally(i, index);
-                                   });
+        bench::for_each_interval(lca,
+                                 [&](std::size_t, const auto& i, const auto& index)
+                                 {
+                                     tally(i, index);
+                                 });
         benchmark::DoNotOptimize(tally);
     }
     bench::report(state, tally);
