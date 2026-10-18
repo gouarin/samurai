@@ -10,6 +10,7 @@
 // File format, text, one record per set:
 //   samurai-set-algebra-inputs <format version> <dim>
 //   levels <min_level> <max_level>
+//   config <graduation_width> <max_stencil_radius>
 //   ca <name> <number of intervals>, then per interval: level start end [y [z]]
 //   lca corner <level> <number of intervals>, then per interval: start end [y [z]]
 // Each interval is the row [start, end) of cells at (y, z) of its level.
@@ -130,6 +131,10 @@ namespace bench
         // configuration, not of the cells.
         std::size_t min_level = 0;
         std::size_t max_level = 0;
+        // mesh.graduation_width() and mesh.max_stencil_radius(), which
+        // make_graduation reads.
+        std::size_t graduation_width = 1;
+        int max_stencil_radius       = 1;
 
         ca_t cells;
         ca_t cells_and_ghosts;
@@ -140,6 +145,11 @@ namespace bench
         ca_t subdomain_pyramid;
         // mesh.corner(d) for each d, in the order of for_each_diagonal_direction
         std::vector<lca_t> corners;
+        // The cells of the next adaptation step before their graduation: what
+        // Adapt::harten (mr/adapt.hpp) passes to make_graduation at its first
+        // iteration, update_cell_array_from_tag(cells, tag), when the fronts
+        // have moved by one step. Not graded.
+        ca_t ungraded_cells;
 
         // MRMeshId::all_cells is MRMeshId::reference.
         const ca_t& all_cells() const
@@ -188,16 +198,17 @@ namespace bench
     template <std::size_t dim>
     bool operator==(const SiteInputs<dim>& a, const SiteInputs<dim>& b)
     {
-        return a.min_level == b.min_level && a.max_level == b.max_level && a.cells == b.cells && a.cells_and_ghosts == b.cells_and_ghosts
+        return a.min_level == b.min_level && a.max_level == b.max_level && a.graduation_width == b.graduation_width
+            && a.max_stencil_radius == b.max_stencil_radius && a.cells == b.cells && a.cells_and_ghosts == b.cells_and_ghosts
             && a.proj_cells == b.proj_cells && a.reference == b.reference && a.union_ == b.union_ && a.domain_pyramid == b.domain_pyramid
-            && a.subdomain_pyramid == b.subdomain_pyramid && a.corners == b.corners;
+            && a.subdomain_pyramid == b.subdomain_pyramid && a.corners == b.corners && a.ungraded_cells == b.ungraded_cells;
     }
 
     //////////////////////////////////////////////////////////////////////
     // Files
     //////////////////////////////////////////////////////////////////////
 
-    inline constexpr int inputs_format_version = 1;
+    inline constexpr int inputs_format_version = 2;
 
     // The CellArrays of the file, by record name. Inputs is SiteInputs<dim>,
     // const or not.
@@ -212,6 +223,7 @@ namespace bench
             std::pair{"union",             &in.union_           },
             std::pair{"domain_pyramid",    &in.domain_pyramid   },
             std::pair{"subdomain_pyramid", &in.subdomain_pyramid},
+            std::pair{"ungraded_cells",    &in.ungraded_cells   },
         };
     }
 
@@ -257,6 +269,7 @@ namespace bench
         std::ofstream out(path);
         out << "samurai-set-algebra-inputs " << inputs_format_version << ' ' << dim << '\n';
         out << "levels " << in.min_level << ' ' << in.max_level << '\n';
+        out << "config " << in.graduation_width << ' ' << in.max_stencil_radius << '\n';
         for (const auto& [name, ca] : named_cell_arrays(in))
         {
             std::size_t n = 0;
@@ -311,9 +324,10 @@ namespace bench
         int version   = 0;
         std::size_t d = 0;
         std::string key;
+        std::string config_key;
         SiteInputs<dim> in;
-        file >> magic >> version >> d >> key >> in.min_level >> in.max_level;
-        if (magic != "samurai-set-algebra-inputs" || version != inputs_format_version || d != dim || key != "levels")
+        file >> magic >> version >> d >> key >> in.min_level >> in.max_level >> config_key >> in.graduation_width >> in.max_stencil_radius;
+        if (magic != "samurai-set-algebra-inputs" || version != inputs_format_version || d != dim || key != "levels" || config_key != "config")
         {
             throw fail("not a set algebra inputs file of version " + std::to_string(inputs_format_version) + " in " + std::to_string(dim)
                        + "D");

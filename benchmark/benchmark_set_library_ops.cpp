@@ -19,7 +19,6 @@
 
 #include <benchmark/benchmark.h>
 
-#include <samurai/algorithm/graduation.hpp>
 #include <samurai/algorithm/update.hpp>
 #include <samurai/mr/criteria.hpp>
 #include <samurai/mr/operators.hpp>
@@ -244,27 +243,6 @@ static void BM_Op_MeshConstruction(benchmark::State& state)
     timers.report(state);
 }
 
-// make_graduation, the MR path. A pipeline of materialized sets, so it has
-// no BM_Site_ counterpart: its whole time is set algebra.
-template <std::size_t dim>
-static void BM_Op_Graduation(benchmark::State& state)
-{
-    const auto& mesh = get_case<dim>(state, true).mesh;
-    for (auto _ : state)
-    {
-        state.PauseTiming();
-        auto ca = mesh[mesh_id_t<dim>::cells];
-        state.ResumeTiming();
-        samurai::make_graduation(ca,
-                                 mesh.domain_pyramid(),
-                                 mesh.mpi_neighbourhood(),
-                                 mesh.periodicity(),
-                                 mesh.graduation_width(),
-                                 mesh.max_stencil_radius());
-        benchmark::DoNotOptimize(ca);
-    }
-}
-
 // update_fields from the mesh of the fronts to the mesh of the moved fronts,
 // the total of BM_Site_FieldTransfer.
 template <std::size_t dim>
@@ -308,7 +286,6 @@ static void BM_Op_UpwindFlux(benchmark::State& state)
     BENCHMARK(BM_Op_UpdateGhost<DIM>)->Apply(bench::mesh_args<DIM>);         \
     BENCHMARK(BM_SiteOp_Detail<DIM>)->Apply(bench::mesh_args<DIM>);          \
     BENCHMARK(BM_SiteOp_Tag<DIM>)->Apply(bench::mesh_args<DIM>);             \
-    BENCHMARK(BM_Op_Graduation<DIM>)->Apply(bench::mesh_args<DIM>);          \
     BENCHMARK(BM_Op_FieldTransfer<DIM>)->Apply(bench::mesh_args<DIM>);       \
     BENCHMARK(BM_Op_AdaptStep<DIM>)->Apply(bench::mesh_args<DIM>);           \
     BENCHMARK(BM_Op_UpwindFlux<DIM>)->Apply(bench::mesh_args<DIM>);

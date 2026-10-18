@@ -2,8 +2,9 @@
 // SPDX-License-Identifier:  BSD-3-Clause
 
 // Adapts the meshes of bench::mesh_cases, unmoved and moved, and writes their
-// sets to the files bench_set_call_sites and bench_dynamic_set read (format
-// in site_inputs.hpp). Each file is read back and compared with the mesh it
+// sets, and the cells of the next step before graduation, to the files
+// bench_set_call_sites, bench_dynamic_set and bench_set_graduation read
+// (format in site_inputs.hpp). Each file is read back and compared with the mesh it
 // comes from.
 
 #include <cstddef>
@@ -26,8 +27,11 @@ namespace
             const auto nballs    = static_cast<std::size_t>(args[1]);
             for (const bool moved : {false, true})
             {
-                const auto in   = bench::make_site_inputs<dim>(bench::adapted_case<dim>(max_level, nballs, moved).mesh);
-                const auto path = bench::inputs_file<dim>(max_level, nballs, moved);
+                const auto& mesh  = bench::adapted_case<dim>(max_level, nballs, moved).mesh;
+                auto in           = bench::make_site_inputs<dim>(mesh);
+                const auto shift  = (moved ? 2. : 1.) * bench::step_shift(mesh);
+                in.ungraded_cells = bench::cells_before_graduation<dim>(mesh, nballs, shift);
+                const auto path   = bench::inputs_file<dim>(max_level, nballs, moved);
                 bench::write_site_inputs(in, path);
                 if (!(bench::read_site_inputs<dim>(path) == in))
                 {

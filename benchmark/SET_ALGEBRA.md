@@ -10,18 +10,17 @@ baseline for the work on the algebra: rerun them before and after a change.
 micromamba activate samurai-env
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
 ninja -C build bench_set_operators bench_set_projection bench_set_mesh_shape \
-               bench_set_call_sites bench_dynamic_set \
+               bench_set_call_sites bench_dynamic_set bench_set_graduation \
                bench_set_library_ops
 ./build/benchmark/bench_set_call_sites --benchmark_filter='<3>'
 ```
 
 `generate_set_algebra_inputs` adapts the meshes and writes their sets to
 `build/benchmark/set_algebra_inputs/` (8 MB, a few seconds). The build runs it
-once, before the first build of `bench_set_call_sites` or `bench_dynamic_set`,
-and not again when the library changes, so the inputs stay the same while the
+once, before the first build of the binaries that read them, and not again when the library changes, so the inputs stay the same while the
 set algebra changes. To regenerate them, delete the directory or run the
-generator. With `-DSAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF`, these two
-binaries build without the mesh stack, and the generator is run by hand. With
+generator. With `-DSAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF`, these
+binaries build without the generator, which is then run by hand. With
 `SAMURAI_SET_ALGEBRA_INPUTS=<dir>` in the environment, the generator and the
 binaries that read the files use another directory, so two builds can share
 one set of inputs.
@@ -41,7 +40,8 @@ if the algebra is optimized or replaced. Their inputs come from three headers:
   synthetic `LevelCellArray`s with a controlled shape.
 - `site_inputs.hpp` holds `SiteInputs`, the sets the library call sites read
   from an MR-adapted mesh (cells, ghosts, reference, projection cells, union,
-  domain and subdomain pyramids, corners), and reads and writes the files. The
+  domain and subdomain pyramids, corners, and the cells of the next adaptation
+  step before graduation), and reads and writes the files. The
   file format is described at the top of the header, so another implementation
   of the algebra can run on the same inputs.
 - `set_call_sites.hpp` holds the call site expressions copied from the library,
@@ -58,6 +58,7 @@ balls, and copies their sets into `SiteInputs`. Only
 | `bench_set_mesh_shape` | algebra | Effect of the shape of a level: the same cells cut into K stripes along each axis, and the same front cut into P subdomains along each axis. |
 | `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step, copied from their source (`BM_Site_*`), and two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`). |
 | `bench_dynamic_set` | algebra, input files | Static against dynamic (runtime) algebra on two library expressions. |
+| `bench_set_graduation` | algebra, `make_graduation`, input files | Cost of `make_graduation` on the cells the adaptation passes to it, before graduation. It reports the cells before (`cells_in`) and after (`cells_out`). |
 | `bench_set_library_ops` | mesh, MR adaptation, fields, schemes | The sets of `BM_Site_*` with the library's field operator (`BM_SiteOp_*`), and the library operations themselves (`BM_Op_*`), on the meshes and arguments of `bench_set_call_sites`. |
 
 `BM_Site_X` (`bench_set_call_sites`) divided by `BM_SiteOp_X`
@@ -201,7 +202,10 @@ against 42 µs, measured on 2026-10-13).
   measured; `BM_Partitioned` only reproduces the cost of the partition shape.
 - The boundary condition itself (`apply_field_bc`) and the periodic ghosts are
   not in `BM_Site_OuterGhosts`.
-- `BM_Op_Graduation` cannot be split: the MR graduation is a pipeline of
-  materialized sets, so its whole time is set algebra and materialization.
+- `BM_Graduation` cannot be split into sites: the MR graduation is a pipeline
+  of materialized sets, so its whole time is set algebra and the building of
+  `LevelCellArray`s. Its input is the first iteration of an adaptation step,
+  where the closure adds a few hundred cells in 2D and 3D; the later
+  iterations of the step are not measured.
 - Two runs of the same binary differ by up to 10 to 30% on the smallest
   benchmarks; compare medians of repeated runs.

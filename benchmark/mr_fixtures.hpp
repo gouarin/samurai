@@ -8,8 +8,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <tuple>
@@ -133,14 +135,16 @@ namespace bench
         static_assert(mesh_t::config_t::prediction_stencil_radius == prediction_stencil_radius);
 
         SiteInputs<dim> in;
-        in.min_level        = mesh.min_level();
-        in.max_level        = mesh.max_level();
-        in.cells            = mesh[mesh_id_t::cells];
-        in.cells_and_ghosts = mesh[mesh_id_t::cells_and_ghosts];
-        in.proj_cells       = mesh[mesh_id_t::proj_cells];
-        in.reference        = mesh[mesh_id_t::reference];
-        in.union_           = mesh.get_union();
-        in.domain_pyramid   = mesh.domain_pyramid();
+        in.min_level          = mesh.min_level();
+        in.max_level          = mesh.max_level();
+        in.graduation_width   = mesh.graduation_width();
+        in.max_stencil_radius = mesh.max_stencil_radius();
+        in.cells              = mesh[mesh_id_t::cells];
+        in.cells_and_ghosts   = mesh[mesh_id_t::cells_and_ghosts];
+        in.proj_cells         = mesh[mesh_id_t::proj_cells];
+        in.reference          = mesh[mesh_id_t::reference];
+        in.union_             = mesh.get_union();
+        in.domain_pyramid     = mesh.domain_pyramid();
         for (std::size_t level = 0; level <= mesh.max_level(); ++level)
         {
             in.subdomain_pyramid[level] = mesh.subdomain(level);
@@ -151,5 +155,60 @@ namespace bench
                 in.corners.push_back(mesh.corner(direction));
             });
         return in;
+    }
+
+    // What Adapt::harten (mr/adapt.hpp) passes to make_graduation at the first
+    // iteration of the adaptation of `adapted` to the fronts shifted by
+    // `shift`: update_cell_array_from_tag(cells, tag), before graduation. A
+    // copy of harten up to that call, for the configuration of AdaptedCase:
+    // sequential, no relative detail, boundary not kept refined.
+    template <std::size_t dim>
+    typename mr_mesh_t<dim>::ca_type cells_before_graduation(const mr_mesh_t<dim>& adapted, std::size_t nballs, double shift)
+    {
+        using mesh_id_t = typename mr_mesh_t<dim>::mesh_id_t;
+
+        auto mesh = adapted;
+        auto u    = samurai::make_scalar_field<double>("u", mesh, balls_indicator<dim>(nballs, shift));
+        samurai::make_bc<samurai::Dirichlet<1>>(u, 0.);
+        auto detail = samurai::make_scalar_field<double>("detail", mesh, 0.);
+        auto tag    = samurai::make_scalar_field<std::uint8_t>("tag", mesh, std::uint8_t{0});
+
+        const std::size_t min_level = mesh.min_level();
+        const std::size_t max_level = mesh.max_level();
+        const auto cfg              = samurai::mra_config().epsilon(mr_epsilon);
+
+        samurai::for_each_cell(mesh[mesh_id_t::cells],
+                               [&](const auto& cell)
+                               {
+                                   tag[cell] = static_cast<std::uint8_t>(samurai::CellFlag::keep);
+                               });
+        samurai::update_ghost_mr(u);
+
+        for (std::size_t level = (min_level > 0) ? min_level - 1 : 0; level < max_level; ++level)
+        {
+            auto ghosts_below_cells = samurai::intersection(
+                                          mesh[mesh_id_t::all_cells][level],
+                                          samurai::union_(mesh[mesh_id_t::cells][level + 1], mesh[mesh_id_t::cells][level + 2]))
+                                          .on(level);
+            ghosts_below_cells.apply_op(samurai::compute_detail(detail, u));
+        }
+
+        for (std::size_t level = std::max<std::size_t>(min_level, 1); level <= max_level; ++level)
+        {
+            const double eps_l = cfg.epsilon() / static_cast<double>(1 << (dim * (max_level - level)));
+            auto subset_1      = samurai::intersection(mesh[mesh_id_t::cells][level], mesh[mesh_id_t::all_cells][level - 1]).on(level - 1);
+            subset_1.apply_op(samurai::mr_criteria(detail, tag, eps_l, cfg.regularity() + dim));
+            samurai::update_tag_subdomains(level, tag, true);
+        }
+
+        for (std::size_t level = max_level; level > 0; --level)
+        {
+            auto keep_subset = samurai::intersection(mesh[mesh_id_t::cells][level], mesh[mesh_id_t::all_cells][level - 1]).on(level - 1);
+            samurai::update_tag_periodic(level, tag);
+            samurai::update_tag_subdomains(level, tag);
+            keep_subset.apply_op(samurai::maximum(tag));
+        }
+
+        return samurai::update_cell_array_from_tag(mesh[mesh_id_t::cells], tag);
     }
 } // namespace bench

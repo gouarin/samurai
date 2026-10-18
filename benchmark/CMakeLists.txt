@@ -32,6 +32,7 @@ set(SAMURAI_BENCHMARK_SOURCES
     benchmark_fv_scheme.cpp
     benchmark_search.cpp
     benchmark_set_call_sites.cpp
+    benchmark_set_graduation.cpp
     benchmark_set_library_ops.cpp
     benchmark_set_mesh_shape.cpp
     benchmark_set_operators.cpp
@@ -51,20 +52,21 @@ foreach(source IN LISTS SAMURAI_BENCHMARK_SOURCES)
     samurai_add_benchmark(${source})
 endforeach()
 
-# bench_set_call_sites and bench_dynamic_set read the sets of the MR-adapted
-# meshes from files, so they compile with the interval structures and the set
-# algebra alone. generate_set_algebra_inputs writes the files. The build runs
+# bench_set_call_sites, bench_dynamic_set and bench_set_graduation read the
+# sets of the MR-adapted meshes from files, so they compile with the interval
+# structures and the set algebra alone. generate_set_algebra_inputs writes the files. The build runs
 # it once, when the directory has no stamp, and not when the library changes,
 # so the inputs stay the same while the set algebra does. With
-# SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF the two binaries no longer
-# depend on the mesh stack, and the generator is run by hand.
+# SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF building these binaries
+# no longer builds the generator, which is then run by hand.
 # SAMURAI_SET_ALGEBRA_INPUTS in the environment overrides the directory at run
 # time.
 option(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS "Generate the set algebra inputs when building the benchmarks that read them" ON)
 set(SAMURAI_SET_ALGEBRA_INPUTS_DIR ${CMAKE_CURRENT_BINARY_DIR}/set_algebra_inputs)
 add_executable(generate_set_algebra_inputs generate_set_algebra_inputs.cpp)
 target_link_libraries(generate_set_algebra_inputs samurai benchmark::benchmark)
-foreach(target generate_set_algebra_inputs bench_set_call_sites bench_dynamic_set)
+set(SAMURAI_SET_ALGEBRA_INPUT_READERS bench_set_call_sites bench_dynamic_set bench_set_graduation)
+foreach(target generate_set_algebra_inputs ${SAMURAI_SET_ALGEBRA_INPUT_READERS})
     target_compile_definitions(${target} PRIVATE SAMURAI_SET_ALGEBRA_INPUTS_DIR="${SAMURAI_SET_ALGEBRA_INPUTS_DIR}")
 endforeach()
 if(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS)
@@ -77,8 +79,9 @@ if(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS)
         COMMENT "Generating the set algebra inputs in ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}"
     )
     add_custom_target(set_algebra_inputs DEPENDS ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp)
-    add_dependencies(bench_set_call_sites set_algebra_inputs)
-    add_dependencies(bench_dynamic_set set_algebra_inputs)
+    foreach(target IN LISTS SAMURAI_SET_ALGEBRA_INPUT_READERS)
+        add_dependencies(${target} set_algebra_inputs)
+    endforeach()
 endif()
 
 # Load balancing micro-benchmarks: MPI-only, its own MPI-aware main(), and
