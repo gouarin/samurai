@@ -168,8 +168,9 @@ namespace bench
     }
 
     // `site` passes each set it evaluates to f(level, set), which only asks
-    // whether the set is empty, with B::empty. Reports the number of sets
-    // that are not (`nonempty`). Returns the number of sets of one iteration.
+    // whether the set is empty, with B::empty, and returns 1 if it is not, 0
+    // if it is. Reports the number of sets that are not (`nonempty`).
+    // Returns the number of sets of one iteration.
     template <class B, class Site>
     std::size_t run_empty_site(benchmark::State& state, Site&& site)
     {
@@ -186,7 +187,7 @@ namespace bench
                     benchmark::DoNotOptimize(is_empty);
                     nonempty += is_empty ? 0 : 1;
                     ++nsets;
-                    return std::size_t{0};
+                    return is_empty ? std::size_t{0} : std::size_t{1};
                 });
         }
         state.counters["nonempty"] = static_cast<double>(nonempty);

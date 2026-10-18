@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <initializer_list>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -141,6 +142,37 @@ namespace bench::sites
             out[k] = d[k] >> delta_l;
         }
         return out;
+    }
+
+    // The meshes of the MPI neighbours of a rank: pointers into the ranks
+    // of its partition, in the order of SiteInputs::neighbours. Empty for a
+    // whole mesh.
+    template <std::size_t dim, class CA>
+    using neighbours_t = std::vector<const SiteInputs<dim, CA>*>;
+
+    template <std::size_t dim, class CA>
+    neighbours_t<dim, CA> neighbours_of(const std::vector<SiteInputs<dim, CA>>& ranks, std::size_t rank)
+    {
+        neighbours_t<dim, CA> neighbours;
+        for (const std::size_t n : ranks[rank].neighbours)
+        {
+            neighbours.push_back(&ranks[n]);
+        }
+        return neighbours;
+    }
+
+    // Calls g(level) for the levels of `cells` that have cells, as
+    // for_each_level (algorithm.hpp:52-62) does.
+    template <class B, class Cells, class G>
+    void for_each_nonempty_level(const Cells& cells, G&& g)
+    {
+        for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
+        {
+            if (!Algebra<B>::empty(cells[level]))
+            {
+                g(level);
+            }
+        }
     }
 
     // add_prediction_ghosts of MRMesh::update_sub_mesh_impl
@@ -517,9 +549,10 @@ namespace bench::sites
     // Cartesian direction, at each level: faces between cells of the same
     // level (lines 34-108), then between a cell and a finer one on either
     // side (lines 125-223 and 239-323), each also across the periodic
-    // boundary when the mesh is periodic along the direction.
+    // boundary when the mesh is periodic along the direction, and with the
+    // cells of each MPI neighbour (lines 93-106, 207-221, 311-325).
     template <class B, std::size_t dim, class CA, class F>
-    void interfaces(const SiteInputs<dim, CA>& in, F&& f)
+    void interfaces(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, F&& f)
     {
         using A               = Algebra<B>;
         const auto& cells     = in.cells;
@@ -529,40 +562,73 @@ namespace bench::sites
             const samurai::DirectionVector<dim> direction = xt::view(directions, d);
             for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
             {
-                const auto& coarse = cells[level];
                 // same level
-                f(level, A::intersection(coarse, A::translate(coarse, -direction)));
+                const auto same_level = [&](const auto& c, const auto& shifted)
+                {
+                    f(level, A::intersection(c, shifted));
+                };
+                const auto& own = cells[level];
+                same_level(own, A::translate(own, -direction));
                 if (in.periodic[d])
                 {
                     const auto shift = periodic_shift(in, level, d);
-                    f(level, A::intersection(coarse, A::translate(A::translate(coarse, shift), -direction)));
-                    f(level, A::intersection(A::translate(coarse, -shift), A::translate(coarse, -direction)));
+                    same_level(own, A::translate(A::translate(own, shift), -direction));
+                    same_level(A::translate(own, -shift), A::translate(own, -direction));
+                }
+                for (const auto* neighbour : neighbours)
+                {
+                    const auto& other = neighbour->cells[level];
+                    same_level(own, A::translate(other, -direction));
+                    same_level(other, A::translate(own, -direction));
+                    if (in.periodic[d])
+                    {
+                        const auto shift = periodic_shift(in, level, d);
+                        same_level(own, A::translate(A::translate(other, shift), -direction));
+                        same_level(A::translate(other, -shift), A::translate(own, -direction));
+                    }
                 }
                 if (level >= cells.max_level())
                 {
                     continue;
                 }
                 const auto& fine = cells[level + 1];
-                // level jump in the direction
-                f(level + 1, A::on(A::intersection(coarse, A::translate(fine, -direction)), level + 1));
-                if (in.periodic[d])
+                // level jumps, in the direction (sign = -1: the fine cells
+                // translated by -direction) then in the opposite one
+                for (const int sign : {-1, 1})
                 {
-                    const auto fine_shift   = periodic_shift(in, level + 1, d);
-                    const auto coarse_shift = periodic_shift(in, level, d);
-                    f(level + 1, A::on(A::intersection(coarse, A::translate(A::translate(fine, fine_shift), -direction)), level + 1));
-                    f(level + 1, A::on(A::intersection(A::translate(coarse, -coarse_shift), A::translate(fine, -direction)), level + 1));
-                }
-                // level jump in the opposite direction
-                f(level + 1, A::on(A::intersection(coarse, A::translate(fine, direction)), level + 1));
-                if (in.periodic[d])
-                {
-                    const auto fine_shift   = periodic_shift(in, level + 1, d);
-                    const auto coarse_shift = periodic_shift(in, level, d);
-                    f(level + 1, A::on(A::intersection(coarse, A::translate(A::translate(fine, -fine_shift), direction)), level + 1));
-                    f(level + 1, A::on(A::intersection(A::translate(coarse, coarse_shift), A::translate(fine, direction)), level + 1));
+                    const auto jump = [&](const auto& coarse_cells, const auto& fine_cells)
+                    {
+                        f(level + 1, A::on(A::intersection(coarse_cells, A::translate(fine_cells, sign * direction)), level + 1));
+                    };
+                    jump(own, fine);
+                    if (in.periodic[d])
+                    {
+                        const auto fine_shift   = periodic_shift(in, level + 1, d);
+                        const auto coarse_shift = periodic_shift(in, level, d);
+                        jump(own, A::translate(fine, -sign * fine_shift));
+                        jump(A::translate(own, sign * coarse_shift), fine);
+                    }
+                    for (const auto* neighbour : neighbours)
+                    {
+                        jump(own, neighbour->cells[level + 1]);
+                        jump(neighbour->cells[level], fine);
+                        if (in.periodic[d])
+                        {
+                            const auto fine_shift   = periodic_shift(in, level + 1, d);
+                            const auto coarse_shift = periodic_shift(in, level, d);
+                            jump(own, A::translate(neighbour->cells[level + 1], -sign * fine_shift));
+                            jump(A::translate(neighbour->cells[level], sign * coarse_shift), fine);
+                        }
+                    }
                 }
             }
         }
+    }
+
+    template <class B, std::size_t dim, class CA, class F>
+    void interfaces(const SiteInputs<dim, CA>& in, F&& f)
+    {
+        interfaces<B>(in, neighbours_t<dim, CA>{}, std::forward<F>(f));
     }
 
     // update_fields (algorithm/update_fields.hpp): copy of the unchanged
@@ -706,18 +772,24 @@ namespace bench::sites
         }
     }
 
-    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:229), sequential, at every
-    // mesh construction: the cells and ghosts (scheme ghosts added row by row
-    // to a cell list, in no order), the periodic copies of the cells
-    // (mr/mesh.hpp:283-322), the prediction ghosts (prediction_ghosts, added
-    // to the same cell list), then the reference cells, refined level by
-    // level where the union covers them, and the projection cells. Emits
+    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:229-460), at every mesh
+    // construction: the cells and ghosts (scheme ghosts added row by row to a
+    // cell list, in no order), the scheme ghosts the cells of the MPI
+    // neighbours give to the subdomain (lines 258-270), the periodic copies
+    // of the cells, own then of the neighbours (lines 283-322), the
+    // prediction ghosts (prediction_ghosts, added to the same cell list),
+    // then those of the cells of the neighbours and of their periodic copies
+    // (lines 385-419), then the reference cells, refined level by level where
+    // the union covers them, and the projection cells. Emits
     // cells_and_ghosts, then reference, then proj_cells, each from level 0 to
-    // max_level + 1.
+    // max_level + 1. In a partition, the neighbours have their own
+    // cells_and_ghosts: the scheme ghosts of their cells, which
+    // update_meshid_neighbour sends (line 384).
     template <class B, std::size_t dim, class CA, class Emit>
-    void mesh_sub_mesh(const SiteInputs<dim, CA>& in, Emit&& emit)
+    void mesh_sub_mesh(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, Emit&& emit)
     {
         using A                     = Algebra<B>;
+        constexpr int pred_r        = prediction_stencil_radius;
         const auto& cells           = in.cells;
         const std::size_t max_level = in.max_level;
         const int radius            = in.max_stencil_radius;
@@ -731,30 +803,41 @@ namespace bench::sites
             return A::on(in.subdomain(), level);
         };
 
-        // for_each_level visits the levels that have cells
-        const auto for_each_level = [&](auto&& g)
+        for (const auto* neighbour : neighbours)
         {
-            for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
-            {
-                if (!A::empty(cells[level]))
+            for_each_nonempty_level<B>(
+                neighbour->cells,
+                [&](std::size_t level)
                 {
-                    g(level);
-                }
+                    A::traverse(A::intersection(A::expand(neighbour->cells[level], radius), A::expand(subdomain_at(level), radius)),
+                                add_to<dim>(cell_list[level]));
+                });
+        }
+
+        const auto directions         = periodic_copies(in);
+        const auto add_periodic_cells = [&](const auto& subset, std::size_t level)
+        {
+            const int delta_l = static_cast<int>(max_level - level);
+            for (const auto& d : directions)
+            {
+                A::traverse(A::intersection(A::expand(A::translate(subset, shift_right(d, delta_l)), radius),
+                                            A::expand(subdomain_at(level), radius)),
+                            add_to<dim>(cell_list[level]));
             }
         };
-
-        const auto directions = periodic_copies(in);
-        for_each_level(
-            [&](std::size_t level)
-            {
-                const int delta_l = static_cast<int>(max_level - level);
-                for (const auto& d : directions)
-                {
-                    A::traverse(A::intersection(A::expand(A::translate(cells[level], shift_right(d, delta_l)), radius),
-                                                A::expand(subdomain_at(level), radius)),
-                                add_to<dim>(cell_list[level]));
-                }
-            });
+        for_each_nonempty_level<B>(cells,
+                                   [&](std::size_t level)
+                                   {
+                                       add_periodic_cells(cells[level], level);
+                                   });
+        for (const auto* neighbour : neighbours)
+        {
+            for_each_nonempty_level<B>(neighbour->cells,
+                                       [&](std::size_t level)
+                                       {
+                                           add_periodic_cells(neighbour->cells[level], level);
+                                       });
+        }
 
         std::vector<lca_t<B, dim>> proj_cells;
         for (std::size_t level = 0; level <= max_level + 1; ++level)
@@ -771,19 +854,42 @@ namespace bench::sites
             return;
         }
 
-        for_each_level(
-            [&](std::size_t level)
-            {
-                prediction_ghosts<B>(in,
-                                     cells_and_ghosts,
-                                     subdomain_at,
-                                     directions,
-                                     level,
-                                     [&](std::size_t ghost_level, const auto& set)
-                                     {
-                                         A::traverse(set, add_to<dim>(cell_list[ghost_level]));
-                                     });
-            });
+        const auto add_to_level = [&](std::size_t ghost_level, const auto& set)
+        {
+            A::traverse(set, add_to<dim>(cell_list[ghost_level]));
+        };
+        for_each_nonempty_level<B>(cells,
+                                   [&](std::size_t level)
+                                   {
+                                       prediction_ghosts<B>(in, cells_and_ghosts, subdomain_at, directions, level, add_to_level);
+                                   });
+        for (const auto* neighbour : neighbours)
+        {
+            for_each_nonempty_level<B>(
+                neighbour->cells,
+                [&](std::size_t level)
+                {
+                    const auto add = [&](const auto& subset_cells, const auto& subset_cells_and_ghosts)
+                    {
+                        add_to_level(level - 1, subset_cells_and_ghosts);
+                        if (level - 1 > 0)
+                        {
+                            add_to_level(level - 2, subset_cells);
+                        }
+                    };
+                    const auto& n_cells = neighbour->cells[level];
+                    const auto& n_cag   = neighbour->cells_and_ghosts[level];
+                    add(A::intersection(A::expand(A::on(n_cells, level - 2), pred_r), subdomain_at(level - 2)),
+                        A::intersection(A::expand(A::on(n_cag, level - 1), pred_r), subdomain_at(level - 1)));
+                    const int delta_l = static_cast<int>(max_level - level);
+                    for (const auto& d : directions)
+                    {
+                        const auto t = shift_right(d, delta_l);
+                        add(A::intersection(A::expand(A::on(A::translate(n_cells, t), level - 2), pred_r), subdomain_at(level - 2)),
+                            A::intersection(A::expand(A::on(A::translate(n_cag, t), level - 1), pred_r), subdomain_at(level - 1)));
+                    }
+                });
+        }
 
         auto reference = cell_list.build();
 
@@ -816,6 +922,24 @@ namespace bench::sites
         emit_levels(cells_and_ghosts, emit);
         emit_levels(reference, emit);
         emit_levels(proj_cells, emit);
+    }
+
+    // The sub-mesh of a whole mesh, sequential.
+    template <class B, std::size_t dim, class CA, class Emit>
+    void mesh_sub_mesh(const SiteInputs<dim, CA>& in, Emit&& emit)
+    {
+        mesh_sub_mesh<B>(in, neighbours_t<dim, CA>{}, std::forward<Emit>(emit));
+    }
+
+    // The scheme ghosts of the cells, the cells_and_ghosts of
+    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:247-254), for each level from
+    // 0 to max_level + 1.
+    template <class B, std::size_t dim, class CA>
+    std::vector<lca_t<B, dim>> scheme_ghosts(const SiteInputs<dim, CA>& in)
+    {
+        BuilderList<B, dim> cell_list(in.max_level);
+        add_scheme_ghosts(cell_list, in.cells, in.max_stencil_radius);
+        return cell_list.build();
     }
 
     // Mesh_base::construct_union (mesh.hpp:1274), at every mesh
@@ -1019,13 +1143,14 @@ namespace bench::sites
     }
 
     // iterate_over_periodic_ghosts(level, field, ...)
-    // (algorithm/update_periodic.hpp:34-180), sequential: along each periodic
-    // axis, four boxes of ghost_width layers at both ends of the domain,
-    // built as LevelCellArrays at every call, and the two sets of the ghosts
-    // filled by copy from the other end. update_tag_periodic (lines 210-416)
-    // evaluates the same two sets.
+    // (algorithm/update_periodic.hpp:34-180): along each periodic axis, four
+    // boxes of ghost_width layers at both ends of the domain, built as
+    // LevelCellArrays at every call, the two sets of the ghosts filled by
+    // copy from the other end, then the two sets sent to each MPI neighbour
+    // and the two received from each (lines 124-171). update_tag_periodic
+    // (lines 210-416) evaluates the same sets, the MPI ones twice.
     template <class B, std::size_t dim, class CA, class F>
-    void periodic_ghosts_at(const SiteInputs<dim, CA>& in, std::size_t level, F&& f)
+    void periodic_ghosts_at(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, std::size_t level, F&& f)
     {
         using A                   = Algebra<B>;
         const auto& mesh_ref      = in.reference;
@@ -1072,6 +1197,27 @@ namespace bench::sites
             f(level,
               A::intersection(A::translate(A::intersection(mesh_ref[level], lca_max_m), -shift), A::intersection(mesh_ref[level], lca_min_m)));
 
+            for (const auto* neighbour : neighbours)
+            {
+                const auto& neighbour_ref = neighbour->reference[level];
+                f(level,
+                  A::intersection(A::translate(A::intersection(mesh_ref[level], lca_min_p), shift),
+                                  A::intersection(neighbour_ref, lca_max_p)));
+                f(level,
+                  A::intersection(A::translate(A::intersection(mesh_ref[level], lca_max_m), -shift),
+                                  A::intersection(neighbour_ref, lca_min_m)));
+            }
+            for (const auto* neighbour : neighbours)
+            {
+                const auto& neighbour_ref = neighbour->reference[level];
+                f(level,
+                  A::intersection(A::translate(A::intersection(neighbour_ref, lca_min_p), shift),
+                                  A::intersection(mesh_ref[level], lca_max_p)));
+                f(level,
+                  A::intersection(A::translate(A::intersection(neighbour_ref, lca_max_m), -shift),
+                                  A::intersection(mesh_ref[level], lca_min_m)));
+            }
+
             shift[d]      = 0;
             min_corner[d] = (min_indices[d] >> delta_l) - gw;
             max_corner[d] = (max_indices[d] >> delta_l) + gw;
@@ -1083,17 +1229,23 @@ namespace bench::sites
     // max_level (update_ghost_mr.hpp:207, 215, 232). Nothing to do on a mesh
     // that is not periodic.
     template <class B, std::size_t dim, class CA, class F>
-    void periodic_ghosts(const SiteInputs<dim, CA>& in, F&& f)
+    void periodic_ghosts(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, F&& f)
     {
         for (std::size_t level = in.max_level + 1; level-- > 0;)
         {
-            periodic_ghosts_at<B>(in, level, f);
-            periodic_ghosts_at<B>(in, level, f);
+            periodic_ghosts_at<B>(in, neighbours, level, f);
+            periodic_ghosts_at<B>(in, neighbours, level, f);
         }
         for (std::size_t level = 1; level <= in.max_level; ++level)
         {
-            periodic_ghosts_at<B>(in, level, f);
+            periodic_ghosts_at<B>(in, neighbours, level, f);
         }
+    }
+
+    template <class B, std::size_t dim, class CA, class F>
+    void periodic_ghosts(const SiteInputs<dim, CA>& in, F&& f)
+    {
+        periodic_ghosts<B>(in, neighbours_t<dim, CA>{}, std::forward<F>(f));
     }
 
     //////////////////////////////////////////////////////////////////////
@@ -1488,5 +1640,352 @@ namespace bench::sites
                             }
                         });
         }
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    // Partitions: what each MPI rank runs, sequentially
+    //////////////////////////////////////////////////////////////////////
+
+    // These sites take the meshes of all the ranks of a partition
+    // (SiteInputs::candidates and neighbours give the other ranks) and run
+    // what one rank runs; the benchmarks run them for every rank in turn.
+
+    // Whether a level cell array is empty, as the library asks it of a
+    // LevelCellArray; a backend with level cell arrays of its own asks its
+    // algebra.
+    template <class B, class LCA>
+    bool lca_empty(const LCA& lca)
+    {
+        if constexpr (requires { lca.empty(); })
+        {
+            return lca.empty();
+        }
+        else
+        {
+            return Algebra<B>::empty(lca);
+        }
+    }
+
+    // Mesh_base::ghost_physical_reach (mesh.hpp:637-647) of a rank in cells
+    // of max_level, the level of the subdomains find_neighbourhood compares:
+    // 2 R + 4 P + 4 cells of the coarsest level of its cells, R the max
+    // stencil radius and P the prediction stencil radius (0 when min_level
+    // is max_level); 0 when the rank has no cell.
+    template <std::size_t dim, class CA>
+    int ghost_reach(const SiteInputs<dim, CA>& in)
+    {
+        const auto& cells = in.cells;
+        if (cells.min_level() > cells.max_level())
+        {
+            return 0;
+        }
+        const int prediction_size = (in.min_level != in.max_level) ? prediction_stencil_radius : 0;
+        const int reach           = 2 * in.max_stencil_radius + 4 * prediction_size + 4;
+        return reach << (in.max_level - cells.min_level());
+    }
+
+    // Mesh_base::find_neighbourhood (mesh.hpp:1309-1413) on rank `rank`, its
+    // phase 3: for each candidate the bounding boxes kept
+    // (SiteInputs::candidates), whether its subdomain meets the subdomain of
+    // the rank expanded by the ghost reach of the pair, directly or through
+    // a periodic boundary. Passes each set to f(level, set), which returns a
+    // positive number when the set is not empty. Returns the neighbours it
+    // finds. The exchange of the bounding boxes and of the subdomains is not
+    // measured.
+    template <class B, std::size_t dim, class CA, class F>
+    std::vector<std::size_t> find_neighbourhood(const std::vector<SiteInputs<dim, CA>>& ranks, std::size_t rank, F&& f)
+    {
+        using A        = Algebra<B>;
+        const auto& in = ranks[rank];
+        std::array<int, dim> ones;
+        ones.fill(1);
+        const auto directions = periodic_directions(ones, 0, in.periodic);
+        const auto extent     = domain_extent(in);
+        const int my_reach    = ghost_reach(in);
+
+        std::vector<std::size_t> neighbours;
+        for (const std::size_t candidate : in.candidates)
+        {
+            const auto& other = ranks[candidate];
+            const int width   = std::max({1, my_reach, ghost_reach(other)});
+            if (f(in.max_level, A::intersection(A::expand(in.subdomain(), width), other.subdomain())) > 0)
+            {
+                neighbours.push_back(candidate);
+                continue;
+            }
+            for (const auto& direction : directions)
+            {
+                samurai::DirectionVector<dim> shift;
+                for (std::size_t d = 0; d < dim; ++d)
+                {
+                    shift[d] = direction[d] * extent[d];
+                }
+                if (f(in.max_level, A::intersection(A::expand(in.subdomain(), width), A::translate(other.subdomain(), shift))) > 0)
+                {
+                    neighbours.push_back(candidate);
+                    break;
+                }
+            }
+        }
+        return neighbours;
+    }
+
+    // Mesh_base::construct_subdomain (mesh.hpp:1203-1239) on more than one
+    // rank, at every mesh construction: the cells of the rank refined to
+    // max_level, row by row, into a LevelCellList, then the build_pyramid
+    // (mesh.hpp:1250-1271) of the LevelCellArray it gives. Emits the
+    // subdomain from level 0 to max_level.
+    template <class B, std::size_t dim, class CA, class Emit>
+    void construct_subdomain(const SiteInputs<dim, CA>& in, Emit&& emit)
+    {
+        using A                     = Algebra<B>;
+        const std::size_t max_level = in.max_level;
+        const auto& cells           = in.cells;
+
+        auto lcl = A::template builder<dim>(max_level);
+        for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
+        {
+            A::traverse(cells[level],
+                        [&](const auto& i, const auto& index_yz)
+                        {
+                            const std::size_t shift = max_level - level;
+                            const interval_t<dim> to_add{i.start << shift, i.end << shift};
+                            const auto shift_index = to_index<dim>(index_yz) << shift;
+                            samurai::static_nested_loop<dim - 1>(0,
+                                                                 1 << shift,
+                                                                 1,
+                                                                 [&](const auto& stencil)
+                                                                 {
+                                                                     lcl.add_interval(to_add, index_t<dim>(shift_index + stencil));
+                                                                 });
+                        });
+        }
+        const auto reference = lcl.build();
+        for (std::size_t level = 0; level <= max_level; ++level)
+        {
+            if (level == max_level)
+            {
+                const auto copy = reference;
+                emit(level, copy);
+                continue;
+            }
+            emit(level, A::materialize(A::on(reference, level)));
+        }
+    }
+
+    // outer_subdomain_corner<to_send>(level, field, neighbour)
+    // (algorithm/update_subdomain.hpp:20-82): along each axis that is not
+    // periodic, the ghosts outside the domain, layer by layer, that the
+    // subdomain of the sender owns and the receiver has. The library pushes
+    // them to an ArrayOfIntervalAndPoint, sorts it and appends it to a
+    // LevelCellArray; here they go to the builder of the backend.
+    template <bool to_send, class B, std::size_t dim, class CA>
+    auto outer_subdomain_corner(const SiteInputs<dim, CA>& in, const SiteInputs<dim, CA>& neighbour, std::size_t level)
+    {
+        using A           = Algebra<B>;
+        const int gw      = ghost_width(in);
+        auto builder      = A::template builder<dim>(level);
+        const auto& mesh1 = to_send ? in : neighbour;
+        const auto& mesh2 = to_send ? neighbour : in;
+        samurai::for_each_cartesian_direction<dim>(
+            [&](std::size_t axis, const auto& bdry_direction)
+            {
+                if (in.periodic[axis])
+                {
+                    return;
+                }
+                auto domain = A::lift(in.domain(level));
+                for (int layer = 1; layer <= gw; ++layer)
+                {
+                    auto layer_band   = A::difference(A::translate(domain, layer * bdry_direction),
+                                                    A::translate(domain, (layer - 1) * bdry_direction));
+                    auto owned_ghosts = A::intersection(mesh1.reference[level],
+                                                        layer_band,
+                                                        A::translate(mesh1.subdomain(level), layer * bdry_direction));
+                    A::traverse(A::intersection(owned_ghosts, mesh2.reference[level]), add_to<dim>(builder));
+                }
+            });
+        return builder.build();
+    }
+
+    // exchange_subdomains_merged(level, field) (algorithm/update_ghost_mr.hpp:125-187)
+    // for one field: for each neighbour where both ranks have cells at the
+    // level, the cells of the interface the rank sends and the outer corners
+    // it owns (pack_subdomain_send, lines 63-87), then those it receives
+    // (unpack_subdomain_recv, lines 93-118). The library reads the corners
+    // with for_each_interval; here they are passed to f.
+    template <class B, std::size_t dim, class CA, class F>
+    void exchange_subdomains(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, std::size_t level, F&& f)
+    {
+        using A           = Algebra<B>;
+        const auto active = [&](const SiteInputs<dim, CA>& neighbour)
+        {
+            return !lca_empty<B>(in.reference[level]) && !lca_empty<B>(neighbour.reference[level]);
+        };
+        // the receives are posted first, under the same test
+        for (const auto* neighbour : neighbours)
+        {
+            benchmark::DoNotOptimize(active(*neighbour));
+        }
+        for (const auto* neighbour : neighbours)
+        {
+            if (!active(*neighbour))
+            {
+                continue;
+            }
+            f(level, A::intersection(in.reference[level], neighbour->reference[level], in.subdomain(level)));
+            f(level, outer_subdomain_corner<true, B>(in, *neighbour, level));
+        }
+        for (const auto* neighbour : neighbours)
+        {
+            if (!active(*neighbour))
+            {
+                continue;
+            }
+            f(level, A::intersection(neighbour->reference[level], in.reference[level], neighbour->subdomain(level)));
+            f(level, outer_subdomain_corner<false, B>(in, *neighbour, level));
+        }
+    }
+
+    // The subdomain exchanges of one update_ghost_mr: twice per level from
+    // max_level down to 0, then once per level from 1 up to max_level
+    // (update_ghost_mr.hpp:206, 214, 231). update_tag_subdomains
+    // (algorithm/update_subdomain.hpp:84-147) evaluates the two interfaces,
+    // without the corners, at each level of an adaptation.
+    template <class B, std::size_t dim, class CA, class F>
+    void subdomain_exchange(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, F&& f)
+    {
+        for (std::size_t level = in.max_level + 1; level-- > 0;)
+        {
+            exchange_subdomains<B>(in, neighbours, level, f);
+            exchange_subdomains<B>(in, neighbours, level, f);
+        }
+        for (std::size_t level = 1; level <= in.max_level; ++level)
+        {
+            exchange_subdomains<B>(in, neighbours, level, f);
+        }
+    }
+
+    // Diffusion::give_to_neighbour (load_balancing/strategies/diffusion.hpp:383-529):
+    // the rank cedes to a neighbour the coarse cells of its interface, one
+    // ring after the other, until it has given `remaining` cells. Adjacency
+    // is computed at min_level: the cells of the rank and of the neighbour
+    // projected to it (project_to_level, lines 722-735), the ring of the
+    // owned coarse cells next to the front (lines 413-427), and for each
+    // coarse cell of the ring a one-cell set intersected with the cells of
+    // every level, once to weigh it and once to cede it (lines 448-503);
+    // then the front and the owned cells are rebuilt (set_union and
+    // set_difference, lines 696-719). Every cell weighs 1, and all the cells
+    // of the rank are its own: the library reads both from fields, cell by
+    // cell, which is not measured. Where the library builds a CellArray (the
+    // one-cell set, the ring, the projections), here it is a level cell array
+    // of min_level. Emits the final front, then the cells the rank keeps.
+    template <class B, std::size_t dim, class CA, class Emit>
+    void diffusion_peel(const SiteInputs<dim, CA>& in, const SiteInputs<dim, CA>& neighbour, double remaining, Emit&& emit)
+    {
+        using A               = Algebra<B>;
+        const std::size_t ref = in.min_level;
+
+        const auto project_to_level = [&](const auto& cells)
+        {
+            auto builder = A::template builder<dim>(ref);
+            for (std::size_t level = cells.min_level(); level <= cells.max_level(); ++level)
+            {
+                A::traverse(A::on(cells[level], ref), add_to<dim>(builder));
+            }
+            return builder.build();
+        };
+        const auto materialize_at_ref = [&](const auto& set)
+        {
+            auto builder = A::template builder<dim>(ref);
+            A::traverse(set, add_to<dim>(builder));
+            return builder.build();
+        };
+        // the cells of every level in a coarse cell
+        const auto weigh = [&](const auto& cc)
+        {
+            double weight = 0.;
+            for (std::size_t level = in.min_level; level <= in.max_level; ++level)
+            {
+                A::traverse(A::on(A::intersection(cc, in.cells[level]), level),
+                            [&](const auto& i, const auto&)
+                            {
+                                weight += static_cast<double>(i.end - i.start);
+                            });
+            }
+            return weight;
+        };
+
+        auto owned            = project_to_level(in.cells);
+        auto boundary         = project_to_level(neighbour.cells);
+        const auto directions = samurai::cartesian_directions<dim>();
+
+        while (remaining > 0.)
+        {
+            auto ring_builder = A::template builder<dim>(ref);
+            for (std::size_t k = 0; k < directions.shape()[0]; ++k)
+            {
+                const samurai::DirectionVector<dim> d = xt::view(directions, k);
+                A::traverse(A::intersection(owned, A::translate(boundary, d)), add_to<dim>(ring_builder));
+            }
+            const auto ring = ring_builder.build();
+            if (A::empty(ring))
+            {
+                break;
+            }
+
+            auto ceded_builder = A::template builder<dim>(ref);
+            bool stop          = false;
+            A::traverse(ring,
+                        [&](const auto& interval, const auto& index)
+                        {
+                            const auto yz = to_index<dim>(index);
+                            for (auto i = interval.start; i < interval.end && !stop; ++i)
+                            {
+                                const auto cc          = one_cell<B, dim>(ref, i, yz);
+                                const double cc_weight = weigh(cc);
+                                if (cc_weight > remaining && cc_weight > 0.)
+                                {
+                                    stop = true;
+                                    break;
+                                }
+                                benchmark::DoNotOptimize(weigh(cc)); // the commit visits the same cells
+                                remaining -= cc_weight;
+                                ceded_builder.add_interval(interval_t<dim>{i, i + 1}, yz);
+                                if (remaining <= 0.)
+                                {
+                                    stop = true;
+                                }
+                            }
+                        });
+            const auto ceded = ceded_builder.build();
+            boundary         = materialize_at_ref(A::union_(boundary, ceded));
+            owned            = materialize_at_ref(A::difference(owned, ceded));
+            if (stop)
+            {
+                break;
+            }
+        }
+        emit(ref, boundary);
+        emit(ref, owned);
+    }
+
+    // The load diffusion_peel cedes to each neighbour: a tenth of the cells
+    // of the rank. The library takes it from the fluxes of a diffusion on the
+    // loads of the ranks, which the equal partitions of the benchmarks would
+    // make zero.
+    template <class B, std::size_t dim, class CA>
+    double peel_load(const SiteInputs<dim, CA>& in)
+    {
+        double cells = 0.;
+        for (std::size_t level = in.cells.min_level(); level <= in.cells.max_level(); ++level)
+        {
+            Algebra<B>::traverse(in.cells[level],
+                                 [&](const auto& i, const auto&)
+                                 {
+                                     cells += static_cast<double>(i.end - i.start);
+                                 });
+        }
+        return cells / 10.;
     }
 } // namespace bench::sites

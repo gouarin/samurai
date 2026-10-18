@@ -64,8 +64,9 @@ endforeach()
 # files. The build runs it when the directory has no stamp and when the
 # sources that decide the content of the files change: the generator, the
 # meshes (mr_fixtures.hpp), the list of meshes and the file format
-# (site_inputs.hpp). It does not run it again when the library changes, so the
-# inputs stay the same while the set algebra does. With
+# (site_inputs.hpp), and the sites that build the meshes of the ranks of a
+# partition (set_call_sites.hpp). It does not run it again when the library
+# changes, so the inputs stay the same while the set algebra does. With
 # SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF building these binaries no
 # longer builds the generator, which is then run by hand.
 # SAMURAI_SET_ALGEBRA_INPUTS in the environment overrides the directory at run
@@ -103,7 +104,9 @@ if(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS)
         DEPENDS
             ${CMAKE_CURRENT_SOURCE_DIR}/generate_set_algebra_inputs.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/mr_fixtures.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/set_algebra_backend.hpp
             ${CMAKE_CURRENT_SOURCE_DIR}/set_algebra_fixtures.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/set_call_sites.hpp
             ${CMAKE_CURRENT_SOURCE_DIR}/site_inputs.hpp
         COMMENT "Generating the set algebra inputs in ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}"
     )
