@@ -235,7 +235,10 @@ namespace bench::sites
         };
     }
 
-    // Adapt::harten (mr/adapt.hpp): detail computation.
+    // Adapt::harten (mr/adapt.hpp): detail computation. At the last level,
+    // cells[level + 2] is cells[max_level + 1], as in the library: an empty
+    // level past the mesh, which CellArray stores (it holds max_size + 1
+    // levels), so the read is safe.
     template <std::size_t dim, class F>
     void detail(const SiteInputs<dim>& in, F&& f)
     {
