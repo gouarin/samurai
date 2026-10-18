@@ -187,6 +187,15 @@ namespace bench
         // iteration, update_cell_array_from_tag(cells, tag), when the fronts
         // have moved by one step. Not graded.
         ca_t ungraded_cells;
+        // The four sets update_cell_array_from_tag (algorithm/graduation.hpp)
+        // fills from the tags before it computes ungraded_cells, named after
+        // its locals: the parents of the coarsened cells (ca_add_m), the
+        // coarsened cells (ca_remove_m), the children of the refined cells
+        // (ca_add_p) and the refined cells (ca_remove_p).
+        ca_t tag_add_m;
+        ca_t tag_remove_m;
+        ca_t tag_add_p;
+        ca_t tag_remove_p;
 
         // MRMeshId::all_cells is MRMeshId::reference.
         const ca_t& all_cells() const
@@ -238,14 +247,16 @@ namespace bench
         return a.min_level == b.min_level && a.max_level == b.max_level && a.graduation_width == b.graduation_width
             && a.max_stencil_radius == b.max_stencil_radius && a.cells == b.cells && a.cells_and_ghosts == b.cells_and_ghosts
             && a.proj_cells == b.proj_cells && a.reference == b.reference && a.union_ == b.union_ && a.domain_pyramid == b.domain_pyramid
-            && a.subdomain_pyramid == b.subdomain_pyramid && a.corners == b.corners && a.ungraded_cells == b.ungraded_cells;
+            && a.subdomain_pyramid == b.subdomain_pyramid && a.corners == b.corners && a.ungraded_cells == b.ungraded_cells
+            && a.tag_add_m == b.tag_add_m && a.tag_remove_m == b.tag_remove_m && a.tag_add_p == b.tag_add_p
+            && a.tag_remove_p == b.tag_remove_p;
     }
 
     //////////////////////////////////////////////////////////////////////
     // Files
     //////////////////////////////////////////////////////////////////////
 
-    inline constexpr int inputs_format_version = 2;
+    inline constexpr int inputs_format_version = 3;
 
     // The CellArrays of the file, by record name. Inputs is SiteInputs<dim>,
     // const or not.
@@ -261,6 +272,10 @@ namespace bench
             std::pair{"domain_pyramid",    &in.domain_pyramid   },
             std::pair{"subdomain_pyramid", &in.subdomain_pyramid},
             std::pair{"ungraded_cells",    &in.ungraded_cells   },
+            std::pair{"tag_add_m",         &in.tag_add_m        },
+            std::pair{"tag_remove_m",      &in.tag_remove_m     },
+            std::pair{"tag_add_p",         &in.tag_add_p        },
+            std::pair{"tag_remove_p",      &in.tag_remove_p     },
         };
     }
 
