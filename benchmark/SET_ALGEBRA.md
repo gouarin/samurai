@@ -30,6 +30,27 @@ one set of inputs.
 For numbers worth comparing, use `--benchmark_repetitions=5
 --benchmark_report_aggregates_only=true`, read the medians, and keep the machine idle.
 
+### Sweep over the level
+
+To draw the time against the number of intervals, configure with
+`-DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON`. The synthetic benchmarks
+(`bench_set_operators`, `bench_set_projection`, `bench_set_mesh_shape`) then
+run at a range of levels instead of one, and the generator writes one more
+mesh per max level, which the call sites read
+([Meshes](#meshes)). The option is off by default because the largest meshes
+of the sweep take most of the generation time and of the disk space. The
+level is the first argument of every benchmark, so a filter selects one curve:
+
+```bash
+cmake -S . -B build -DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON
+ninja -C build bench_set_operators bench_set_call_sites
+./build/benchmark/bench_set_operators --benchmark_filter='BM_Self<2, Shape::shell>/'
+./build/benchmark/bench_set_call_sites --benchmark_filter='^static/BM_Site_Tag<3>/[0-9]+/8/1$'
+```
+
+Each point reports the intervals of its input (`in_itv` for a synthetic set,
+`leaf_itv` for a mesh) and of its output (`itv`).
+
 Every benchmark reports `itv` and `cells` (what the set emitted per iteration)
 and `t/itv`, the time per emitted interval. A site that builds level cell
 arrays reports the intervals and cells of the arrays it keeps; a benchmark
@@ -41,7 +62,9 @@ Most binaries need only samurai's interval structures (`LevelCellArray`,
 if the algebra is optimized or replaced. Their inputs come from these headers:
 
 - `set_algebra_fixtures.hpp` holds the traversal and its counters, and
-  synthetic `LevelCellArray`s with a controlled shape.
+  synthetic `LevelCellArray`s with a controlled shape. A synthetic benchmark
+  takes the level of its sets as its first argument: 20 in 1D, 11 in 2D and
+  8 in 3D, or the levels of the sweep.
 - `site_inputs.hpp` holds `SiteInputs`, the sets the library call sites read
   from an MR-adapted mesh (cells, ghosts, reference, projection cells, union,
   domain and subdomain pyramids, corners, the cells of the next adaptation
@@ -204,6 +227,15 @@ max stencil radius of 1.
 | 3D | 7 | 1 | 1 | 135,640 |
 | 3D | 7 | 8 | 1 | 197,884 |
 | 3D | 7 | 8 | 3 | 206,900 |
+
+With the sweep, `bench::sweep_cases` adds one mesh per max level, with a
+max stencil radius of 1 and the balls of the main mesh of each dimension:
+
+| Dimension | Max levels | Balls |
+| --- | --- | ---: |
+| 1D | 12, 14, 16, 18, 20 | 256 |
+| 2D | 8 to 13 | 16 |
+| 3D | 5 to 9 | 8 |
 
 `mr_config` (`mr_fixtures.hpp`) builds every mesh with min level 2, the default
 graduation width (1) and prediction stencil radius (1), and two settings that

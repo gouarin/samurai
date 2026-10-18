@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <numbers>
 #include <utility>
 #include <vector>
@@ -349,6 +350,98 @@ namespace bench
     samurai::LevelCellArray<dim> make_front(std::size_t level)
     {
         return (dim == 1) ? make_shape<dim>(Shape::balls, level, 0, 4096) : make_shape<dim>(Shape::shell, level);
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    // The level of the synthetic sets
+    //////////////////////////////////////////////////////////////////////
+
+    // Whether the build has the sweep over the level
+    // (-DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON): more levels for the
+    // synthetic sets and more meshes for the call sites.
+#ifdef SAMURAI_SET_ALGEBRA_SWEEP
+    inline constexpr bool sweep_enabled = true;
+#else
+    inline constexpr bool sweep_enabled = false;
+#endif
+
+    // The level of the synthetic sets of a default run.
+    template <std::size_t dim>
+    constexpr std::size_t synthetic_level()
+    {
+        return (dim == 1) ? 20 : ((dim == 2) ? 11 : 8);
+    }
+
+    // The levels the synthetic benchmarks run at, their first argument:
+    // synthetic_level, and with the sweep a range of levels around it, for
+    // curves of the time against the number of intervals. In 1D the front
+    // needs level 16 for its 4096 segments to be at least two cells wide.
+    template <std::size_t dim>
+    std::vector<std::size_t> synthetic_levels()
+    {
+        if constexpr (!sweep_enabled)
+        {
+            return {synthetic_level<dim>()};
+        }
+        else if constexpr (dim == 1)
+        {
+            return {16, 18, 20, 22, 24};
+        }
+        else if constexpr (dim == 2)
+        {
+            return {8, 9, 10, 11, 12, 13};
+        }
+        else
+        {
+            return {5, 6, 7, 8, 9};
+        }
+    }
+
+    // make_front(level), built once per binary.
+    template <std::size_t dim>
+    const samurai::LevelCellArray<dim>& front(std::size_t level)
+    {
+        static std::map<std::size_t, samurai::LevelCellArray<dim>> cache;
+        auto it = cache.find(level);
+        if (it == cache.end())
+        {
+            it = cache.emplace(level, make_front<dim>(level)).first;
+        }
+        return it->second;
+    }
+
+    // The level of a synthetic benchmark, its first argument.
+    inline std::size_t synthetic_level(const benchmark::State& state)
+    {
+        return static_cast<std::size_t>(state.range(0));
+    }
+
+    // Registers one benchmark per level of synthetic_levels, with the
+    // arguments `more(level)` after the level: a list of argument lists,
+    // none for a benchmark without other arguments.
+    template <std::size_t dim, class More>
+    void level_args(benchmark::internal::Benchmark* b, More&& more)
+    {
+        for (const std::size_t level : synthetic_levels<dim>())
+        {
+            for (const auto& args : more(level))
+            {
+                std::vector<int64_t> all{static_cast<int64_t>(level)};
+                all.insert(all.end(), args.begin(), args.end());
+                b->Args(all);
+            }
+        }
+    }
+
+    // One benchmark per level, without other arguments.
+    template <std::size_t dim>
+    void level_args(benchmark::internal::Benchmark* b)
+    {
+        level_args<dim>(b,
+                        [](std::size_t)
+                        {
+                            return std::vector<std::vector<int64_t>>{{}};
+                        });
     }
 
     template <std::size_t dim>

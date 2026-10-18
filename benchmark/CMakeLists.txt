@@ -70,7 +70,13 @@ endforeach()
 # longer builds the generator, which is then run by hand.
 # SAMURAI_SET_ALGEBRA_INPUTS in the environment overrides the directory at run
 # time.
+#
+# SAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON adds the sweep over the level: the
+# synthetic benchmarks run at a range of levels, and the generator writes and
+# the call sites read one more mesh per max level (bench::sweep_cases). It has
+# its own stamp, so that turning it on generates the meshes it adds.
 option(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS "Generate the set algebra inputs when building the benchmarks that read them" ON)
+option(SAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP "Run the set algebra benchmarks over a range of levels" OFF)
 set(SAMURAI_SET_ALGEBRA_INPUTS_DIR ${CMAKE_CURRENT_BINARY_DIR}/set_algebra_inputs)
 add_executable(generate_set_algebra_inputs generate_set_algebra_inputs.cpp)
 target_link_libraries(generate_set_algebra_inputs samurai benchmark::benchmark)
@@ -78,14 +84,22 @@ set(SAMURAI_SET_ALGEBRA_INPUT_READERS bench_set_call_sites bench_dynamic_set ben
 foreach(target generate_set_algebra_inputs ${SAMURAI_SET_ALGEBRA_INPUT_READERS})
     target_compile_definitions(${target} PRIVATE SAMURAI_SET_ALGEBRA_INPUTS_DIR="${SAMURAI_SET_ALGEBRA_INPUTS_DIR}")
 endforeach()
+set(SAMURAI_SET_ALGEBRA_STAMP generated.stamp)
+if(SAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP)
+    set(SAMURAI_SET_ALGEBRA_STAMP generated-sweep.stamp)
+    foreach(target generate_set_algebra_inputs ${SAMURAI_SET_ALGEBRA_INPUT_READERS}
+                   bench_set_operators bench_set_projection bench_set_mesh_shape bench_set_library_ops)
+        target_compile_definitions(${target} PRIVATE SAMURAI_SET_ALGEBRA_SWEEP)
+    endforeach()
+endif()
 if(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS)
     # The generator is named in COMMAND, which builds it first, and not in
     # DEPENDS, which would also run it again each time it is rebuilt, that is
     # each time a library header changes. DEPENDS lists its sources instead.
     add_custom_command(
-        OUTPUT ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp
+        OUTPUT ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/${SAMURAI_SET_ALGEBRA_STAMP}
         COMMAND generate_set_algebra_inputs
-        COMMAND ${CMAKE_COMMAND} -E touch ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp
+        COMMAND ${CMAKE_COMMAND} -E touch ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/${SAMURAI_SET_ALGEBRA_STAMP}
         DEPENDS
             ${CMAKE_CURRENT_SOURCE_DIR}/generate_set_algebra_inputs.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/mr_fixtures.hpp
@@ -93,7 +107,7 @@ if(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/site_inputs.hpp
         COMMENT "Generating the set algebra inputs in ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}"
     )
-    add_custom_target(set_algebra_inputs DEPENDS ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp)
+    add_custom_target(set_algebra_inputs DEPENDS ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/${SAMURAI_SET_ALGEBRA_STAMP})
     foreach(target IN LISTS SAMURAI_SET_ALGEBRA_INPUT_READERS)
         add_dependencies(${target} set_algebra_inputs)
     endforeach()

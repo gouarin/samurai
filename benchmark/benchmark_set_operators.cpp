@@ -6,11 +6,15 @@
 //
 // Inputs: a front (a thin spherical shell in 2D and 3D, many small segments
 // in 1D, where a shell has only two intervals), a box, and balls for the
-// arity benchmarks.
+// arity benchmarks, all at the level given as the first argument
+// (bench::synthetic_levels).
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <utility>
+#include <vector>
 
 #include <benchmark/benchmark.h>
 
@@ -20,34 +24,35 @@ namespace
 {
     using bench::Shape;
 
-    template <std::size_t dim>
-    constexpr std::size_t front_level()
-    {
-        return (dim == 1) ? 20 : ((dim == 2) ? 11 : 8);
-    }
-
-    template <std::size_t dim>
-    const samurai::LevelCellArray<dim>& front()
-    {
-        static const auto lca = bench::make_front<dim>(front_level<dim>());
-        return lca;
-    }
-
     // Thick objects: translates by a few cells keep most of their cells, so
     // the output of the arity benchmarks hardly depends on the arity.
     template <std::size_t dim>
-    const samurai::LevelCellArray<dim>& balls()
+    const samurai::LevelCellArray<dim>& balls(std::size_t level)
     {
-        static const auto lca = bench::make_shape<dim>(Shape::balls, front_level<dim>(), 0, (dim == 1) ? 4096 : 64);
-        return lca;
+        static std::map<std::size_t, samurai::LevelCellArray<dim>> cache;
+        auto it = cache.find(level);
+        if (it == cache.end())
+        {
+            it = cache.emplace(level, bench::make_shape<dim>(Shape::balls, level, 0, (dim == 1) ? 4096 : 64)).first;
+        }
+        return it->second;
     }
 
     // Shape::shell stands for the front.
     template <std::size_t dim>
-    const samurai::LevelCellArray<dim>& input(Shape shape)
+    const samurai::LevelCellArray<dim>& input(Shape shape, std::size_t level)
     {
-        static const auto box = bench::make_shape<dim>(Shape::box, front_level<dim>());
-        return (shape == Shape::box) ? box : front<dim>();
+        static std::map<std::size_t, samurai::LevelCellArray<dim>> boxes;
+        if (shape != Shape::box)
+        {
+            return bench::front<dim>(level);
+        }
+        auto it = boxes.find(level);
+        if (it == boxes.end())
+        {
+            it = boxes.emplace(level, bench::make_shape<dim>(Shape::box, level)).first;
+        }
+        return it->second;
     }
 
     // Every operand differs from the others.
@@ -91,7 +96,7 @@ namespace
     template <std::size_t dim, std::size_t N, class Op>
     void run_arity(benchmark::State& state, Op&& op)
     {
-        const auto& lca = balls<dim>();
+        const auto& lca = balls<dim>(bench::synthetic_level(state));
         const auto t    = translations<dim, N - 1>();
         run_nary(state,
                  lca,
@@ -110,7 +115,7 @@ namespace
 template <std::size_t dim, Shape shape>
 static void BM_RawLoop(benchmark::State& state)
 {
-    const auto& lca = input<dim>(shape);
+    const auto& lca = input<dim>(shape, bench::synthetic_level(state));
     bench::Tally tally;
     for (auto _ : state)
     {
@@ -129,7 +134,7 @@ static void BM_RawLoop(benchmark::State& state)
 template <std::size_t dim, Shape shape>
 static void BM_Self(benchmark::State& state)
 {
-    const auto& lca = input<dim>(shape);
+    const auto& lca = input<dim>(shape, bench::synthetic_level(state));
     bench::run(state,
                [&]
                {
@@ -138,16 +143,16 @@ static void BM_Self(benchmark::State& state)
     bench::report_input(state, lca);
 }
 
-BENCHMARK(BM_RawLoop<1, Shape::shell>);
-BENCHMARK(BM_Self<1, Shape::shell>);
-BENCHMARK(BM_RawLoop<2, Shape::shell>);
-BENCHMARK(BM_Self<2, Shape::shell>);
-BENCHMARK(BM_RawLoop<2, Shape::box>);
-BENCHMARK(BM_Self<2, Shape::box>);
-BENCHMARK(BM_RawLoop<3, Shape::shell>);
-BENCHMARK(BM_Self<3, Shape::shell>);
-BENCHMARK(BM_RawLoop<3, Shape::box>);
-BENCHMARK(BM_Self<3, Shape::box>);
+BENCHMARK(BM_RawLoop<1, Shape::shell>)->Apply(bench::level_args<1>);
+BENCHMARK(BM_Self<1, Shape::shell>)->Apply(bench::level_args<1>);
+BENCHMARK(BM_RawLoop<2, Shape::shell>)->Apply(bench::level_args<2>);
+BENCHMARK(BM_Self<2, Shape::shell>)->Apply(bench::level_args<2>);
+BENCHMARK(BM_RawLoop<2, Shape::box>)->Apply(bench::level_args<2>);
+BENCHMARK(BM_Self<2, Shape::box>)->Apply(bench::level_args<2>);
+BENCHMARK(BM_RawLoop<3, Shape::shell>)->Apply(bench::level_args<3>);
+BENCHMARK(BM_Self<3, Shape::shell>)->Apply(bench::level_args<3>);
+BENCHMARK(BM_RawLoop<3, Shape::box>)->Apply(bench::level_args<3>);
+BENCHMARK(BM_Self<3, Shape::box>)->Apply(bench::level_args<3>);
 
 // --- Arity of the N-ary operators ---------------------------------------------
 
@@ -171,7 +176,7 @@ static void BM_UnionArity(benchmark::State& state)
 template <std::size_t dim, std::size_t N>
 static void BM_IntersectionSameArity(benchmark::State& state)
 {
-    const auto& lca = balls<dim>();
+    const auto& lca = balls<dim>(bench::synthetic_level(state));
     run_nary(state,
              lca,
              N,
@@ -186,7 +191,7 @@ static void BM_IntersectionSameArity(benchmark::State& state)
 template <std::size_t dim, std::size_t N>
 static void BM_IntersectionNestedArity(benchmark::State& state)
 {
-    const auto& lca = balls<dim>();
+    const auto& lca = balls<dim>(bench::synthetic_level(state));
     const auto t    = translations<dim, N - 1>();
     run_nary(state,
              lca,
@@ -197,12 +202,12 @@ static void BM_IntersectionNestedArity(benchmark::State& state)
              });
 }
 
-#define SAMURAI_BENCH_ARITY(NAME, DIM) \
-    BENCHMARK(NAME<DIM, 2>);           \
-    BENCHMARK(NAME<DIM, 3>);           \
-    BENCHMARK(NAME<DIM, 5>);           \
-    BENCHMARK(NAME<DIM, 9>);           \
-    BENCHMARK(NAME<DIM, 17>);
+#define SAMURAI_BENCH_ARITY(NAME, DIM)                      \
+    BENCHMARK(NAME<DIM, 2>)->Apply(bench::level_args<DIM>); \
+    BENCHMARK(NAME<DIM, 3>)->Apply(bench::level_args<DIM>); \
+    BENCHMARK(NAME<DIM, 5>)->Apply(bench::level_args<DIM>); \
+    BENCHMARK(NAME<DIM, 9>)->Apply(bench::level_args<DIM>); \
+    BENCHMARK(NAME<DIM, 17>)->Apply(bench::level_args<DIM>);
 
 SAMURAI_BENCH_ARITY(BM_IntersectionArity, 1)
 SAMURAI_BENCH_ARITY(BM_IntersectionArity, 2)
@@ -218,12 +223,12 @@ SAMURAI_BENCH_ARITY(BM_IntersectionNestedArity, 3)
 // --- Expansion ------------------------------------------------------------------
 
 // expand(a, w), which nestedExpand() resolves to: how the cost grows with the
-// width, against BM_Self on the same front.
+// width, against BM_Self on the same front. Args: (level, w).
 template <std::size_t dim>
 static void BM_Expand(benchmark::State& state)
 {
-    const auto& lca = front<dim>();
-    const int w     = static_cast<int>(state.range(0));
+    const auto& lca = bench::front<dim>(bench::synthetic_level(state));
+    const int w     = static_cast<int>(state.range(1));
     bench::run(state,
                [&]
                {
@@ -231,8 +236,21 @@ static void BM_Expand(benchmark::State& state)
                });
 }
 
-BENCHMARK(BM_Expand<1>)->Arg(1)->Arg(2)->Arg(4)->Arg(8);
-BENCHMARK(BM_Expand<2>)->Arg(1)->Arg(2)->Arg(4)->Arg(8);
-BENCHMARK(BM_Expand<3>)->Arg(1)->Arg(2)->Arg(4)->Arg(8);
+namespace
+{
+    template <std::size_t dim>
+    void expand_args(benchmark::internal::Benchmark* b)
+    {
+        bench::level_args<dim>(b,
+                               [](std::size_t)
+                               {
+                                   return std::vector<std::vector<int64_t>>{{1}, {2}, {4}, {8}};
+                               });
+    }
+} // namespace
+
+BENCHMARK(BM_Expand<1>)->Apply(expand_args<1>);
+BENCHMARK(BM_Expand<2>)->Apply(expand_args<2>);
+BENCHMARK(BM_Expand<3>)->Apply(expand_args<3>);
 
 BENCHMARK_MAIN();
