@@ -112,7 +112,9 @@ namespace bench
     }
 
     // `site` passes each set it evaluates to f(level, set), a set of the
-    // backend B. Returns the number of sets of one iteration.
+    // backend B, which returns the number of intervals of the set: a site
+    // that branches on whether a set is empty reads it there. Returns the
+    // number of sets of one iteration.
     template <class B, class Site>
     std::size_t run_site(benchmark::State& state, Site&& site)
     {
@@ -125,11 +127,68 @@ namespace bench
             site(
                 [&](std::size_t, const auto& set)
                 {
-                    tally += traverse<B>(set);
+                    const Tally t = traverse<B>(set);
+                    tally += t;
                     ++nsets;
+                    return t.intervals;
                 });
         }
         report(state, tally);
+        return nsets;
+    }
+
+    // `site` builds level cell arrays of the backend B and passes each one it
+    // keeps to emit(level, lca). The time is that of building them; their
+    // intervals and cells are counted after the timed loop, on one more run.
+    // Returns the number of level cell arrays of one iteration.
+    template <class B, class Site>
+    std::size_t run_build_site(benchmark::State& state, Site&& site)
+    {
+        for (auto _ : state)
+        {
+            site(
+                [](std::size_t, const auto& lca)
+                {
+                    const auto* p = &lca;
+                    benchmark::DoNotOptimize(p);
+                    benchmark::ClobberMemory();
+                });
+        }
+        Tally tally;
+        std::size_t nsets = 0;
+        site(
+            [&](std::size_t, const auto& lca)
+            {
+                tally += traverse<B>(lca);
+                ++nsets;
+            });
+        report(state, tally);
+        return nsets;
+    }
+
+    // `site` passes each set it evaluates to f(level, set), which only asks
+    // whether the set is empty, with B::empty. Reports the number of sets
+    // that are not (`nonempty`). Returns the number of sets of one iteration.
+    template <class B, class Site>
+    std::size_t run_empty_site(benchmark::State& state, Site&& site)
+    {
+        std::size_t nonempty = 0;
+        std::size_t nsets    = 0;
+        for (auto _ : state)
+        {
+            nonempty = 0;
+            nsets    = 0;
+            site(
+                [&](std::size_t, const auto& set)
+                {
+                    bool is_empty = Algebra<B>::empty(set);
+                    benchmark::DoNotOptimize(is_empty);
+                    nonempty += is_empty ? 0 : 1;
+                    ++nsets;
+                    return std::size_t{0};
+                });
+        }
+        state.counters["nonempty"] = static_cast<double>(nonempty);
         return nsets;
     }
 

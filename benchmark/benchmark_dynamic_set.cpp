@@ -8,6 +8,8 @@
 // figure includes the construction of their heap-allocated nodes. The ratio
 // dynamic/BM_Site_X / static/BM_Site_X is the price of the runtime tree.
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <string_view>
 
@@ -28,12 +30,23 @@ namespace
         b->Unit(benchmark::kMicrosecond);
     }
 
-    // Without the prediction ghosts of the mesh construction: on 2026-10-18,
-    // samurai::dyn::expand returned other cells than the static expansion
-    // there, and took 290 s per iteration in 3D against 1 to 2 ms.
+    // Without the sites the dynamic algebra gets wrong. On 2026-10-18:
+    // - the prediction ghosts of the mesh construction, alone
+    //   (MeshPredictionGhosts) or within MRMesh::update_sub_mesh_impl
+    //   (MeshSubMesh): samurai::dyn::expand of a set projection returned
+    //   other cells than the static expansion, took 290 s per iteration in
+    //   3D against 1 to 2 ms, and failed the assertion n_traversers == 1 of
+    //   Projection<DynamicSetAdaptor> in a build with assertions;
+    // - the contraction along every axis (Mode_Contract): samurai::dyn::contract
+    //   returned other cells than the static one in 3D, which matches
+    //   domain_boundary(mesh, level).
     bool keep(std::string_view site)
     {
-        return site.find("MeshPredictionGhosts") == std::string_view::npos;
+        constexpr std::array<std::string_view, 4> excluded{"BM_Site_MeshPredictionGhosts",
+                                                           "BM_SiteCached_MeshPredictionGhosts",
+                                                           "BM_Site_MeshSubMesh",
+                                                           "BM_Mode_Contract"};
+        return std::find(excluded.begin(), excluded.end(), site) == excluded.end();
     }
 
     template <class B>

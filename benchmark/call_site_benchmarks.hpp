@@ -1,9 +1,10 @@
 // Copyright 2018-2025 the samurai's authors
 // SPDX-License-Identifier:  BSD-3-Clause
 
-// The benchmarks of the call sites (set_call_sites.hpp), for one backend of
-// the set algebra (set_algebra_backend.hpp). register_call_sites<B, dim>
-// registers them as <B::name>/BM_Site_X<dim>, so that
+// The benchmarks of the call sites (set_call_sites.hpp) and of the ways to
+// consume a set (set_modes.hpp), for one backend of the set algebra
+// (set_algebra_backend.hpp). register_call_sites<B, dim> registers them as
+// <B::name>/BM_Site_X<dim> and <B::name>/BM_Mode_X<dim>, so that
 // --benchmark_filter='^<name>/' selects the backend.
 //
 // Args: (max_level, number of balls, stencil radius), see bench::mesh_cases.
@@ -20,6 +21,7 @@
 #include "set_algebra_backend.hpp"
 #include "set_algebra_fixtures.hpp"
 #include "set_call_sites.hpp"
+#include "set_modes.hpp"
 #include "site_inputs.hpp"
 
 namespace bench
@@ -159,6 +161,162 @@ namespace bench
                        sites::field_transfer<B>(in, new_in, f);
                    });
         }
+
+        // The sites that build level cell arrays: the time is that of
+        // building them, `itv` and `cells` count what they keep.
+        template <class B, class Site>
+        void run_build(benchmark::State& state, Site&& site)
+        {
+            state.counters["sets"] = static_cast<double>(bench::run_build_site<B>(state, std::forward<Site>(site)));
+        }
+
+        template <class B, std::size_t dim>
+        void MeshSubMesh(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run_build<B>(state,
+                         [&](auto&& emit)
+                         {
+                             sites::mesh_sub_mesh<B>(in, emit);
+                         });
+        }
+
+        template <class B, std::size_t dim>
+        void ConstructUnion(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run_build<B>(state,
+                         [&](auto&& emit)
+                         {
+                             sites::construct_union<B>(in, emit);
+                         });
+        }
+
+        template <class B, std::size_t dim>
+        void BuildPyramid(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run_build<B>(state,
+                         [&](auto&& emit)
+                         {
+                             sites::build_pyramid<B>(in, emit);
+                         });
+        }
+
+        template <class B, std::size_t dim>
+        void CellArrayFromTag(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run_build<B>(state,
+                         [&](auto&& emit)
+                         {
+                             sites::cell_array_from_tag<B>(in, emit);
+                         });
+        }
+
+        template <class B, std::size_t dim>
+        void AmrSubMesh(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run_build<B>(state,
+                         [&](auto&& emit)
+                         {
+                             sites::amr_sub_mesh<B>(in, emit);
+                         });
+        }
+
+        // The regions are built once, when the boundary condition is.
+        template <class B, std::size_t dim>
+        void BcCells(benchmark::State& state)
+        {
+            const auto& in     = backend_inputs<B, dim>(state);
+            const auto regions = sites::bc_regions<B>(in);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       sites::bc_cells<B>(in, regions, f);
+                   });
+        }
+
+        template <class B, std::size_t dim>
+        void BcCorners(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       sites::bc_corners<B>(in, f);
+                   });
+        }
+
+        template <class B, std::size_t dim>
+        void BcFurtherGhosts(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       sites::bc_further_ghosts<B>(in, f);
+                   });
+        }
+
+        template <class B, std::size_t dim>
+        void PerCellChildren(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       sites::per_cell_children<B>(in, f);
+                   });
+        }
+
+        // The ghosts without an owner are found outside the timed loop.
+        template <class B, std::size_t dim>
+        void OwnershipPerCell(benchmark::State& state)
+        {
+            const auto& in    = backend_inputs<B, dim>(state);
+            const auto ghosts = sites::ownership_ghosts<B>(in);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       sites::ownership_per_cell<B>(in, ghosts, f);
+                   });
+        }
+
+        // The modes of set_modes.hpp, one benchmark per function.
+        template <class B, std::size_t dim, auto Mode>
+        void TraverseMode(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run<B>(state,
+                   [&](auto&& f)
+                   {
+                       Mode(in, f);
+                   });
+        }
+
+        template <class B, std::size_t dim, auto Mode>
+        void BuildMode(benchmark::State& state)
+        {
+            const auto& in = backend_inputs<B, dim>(state);
+            run_build<B>(state,
+                         [&](auto&& emit)
+                         {
+                             Mode(in, emit);
+                         });
+        }
+
+        template <class B, std::size_t dim, auto Mode>
+        void EmptyMode(benchmark::State& state)
+        {
+            const auto& in         = backend_inputs<B, dim>(state);
+            state.counters["sets"] = static_cast<double>(bench::run_empty_site<B>(state,
+                                                                                  [&](auto&& f)
+                                                                                  {
+                                                                                      Mode(in, f);
+                                                                                  }));
+        }
     } // namespace call_sites
 
     // `args` gives the meshes, as mesh_args<dim> does. Registers the sites
@@ -192,5 +350,44 @@ namespace bench
         add("BM_Site_Tag", call_sites::Tag<B, dim>);
         add("BM_Site_FieldTransfer", call_sites::FieldTransfer<B, dim>);
         add("BM_Site_Interfaces", call_sites::Interfaces<B, dim>);
+        add("BM_Site_MeshSubMesh", call_sites::MeshSubMesh<B, dim>);
+        add("BM_Site_ConstructUnion", call_sites::ConstructUnion<B, dim>);
+        add("BM_Site_BuildPyramid", call_sites::BuildPyramid<B, dim>);
+        add("BM_Site_CellArrayFromTag", call_sites::CellArrayFromTag<B, dim>);
+        add("BM_Site_AmrSubMesh", call_sites::AmrSubMesh<B, dim>);
+        add("BM_Site_BcCells", call_sites::BcCells<B, dim>);
+        add("BM_Site_BcCorners", call_sites::BcCorners<B, dim>);
+        add("BM_Site_BcFurtherGhosts", call_sites::BcFurtherGhosts<B, dim>);
+        add("BM_Site_PerCellChildren", call_sites::PerCellChildren<B, dim>);
+        add("BM_Site_OwnershipPerCell", call_sites::OwnershipPerCell<B, dim>);
+
+        using in_t = backend_inputs_t<B, dim>;
+        // A function template cannot be a template argument: each mode is
+        // wrapped in a lambda without capture.
+#define BENCH_MODE(KIND, NAME, FUNCTION)                      \
+    add("BM_Mode_" NAME,                                      \
+        call_sites::KIND##Mode<B,                             \
+                               dim,                           \
+                               [](const in_t& in, auto& f)    \
+                               {                              \
+                                   modes::FUNCTION<B>(in, f); \
+                               }>)
+        BENCH_MODE(Traverse, "Traverse", traverse_proj_cells);
+        BENCH_MODE(Build, "Materialize", materialize_proj_cells);
+        BENCH_MODE(Build, "Build", build_proj_cells);
+        BENCH_MODE(Empty, "EmptyHit", empty_hit);
+        BENCH_MODE(Empty, "EmptyMiss", empty_miss);
+        BENCH_MODE(Traverse, "Contract", contract);
+        BENCH_MODE(Traverse, "ContractMasked", contract_masked);
+        BENCH_MODE(Traverse, "ExpandUniform", expand_uniform);
+        BENCH_MODE(Traverse, "ExpandAxes", expand_axes);
+        BENCH_MODE(Traverse, "ExpandMasked", expand_masked);
+        BENCH_MODE(Traverse, "OnMixedLevels", on_mixed_levels);
+        BENCH_MODE(Traverse, "OnSameLevel", on_same_level);
+        BENCH_MODE(Traverse, "NestedOn", nested_on);
+        BENCH_MODE(Traverse, "FlatOn", flat_on);
+        BENCH_MODE(Traverse, "IntersectionSelfOn", intersection_self_on);
+        BENCH_MODE(Traverse, "SelfOn", self_on);
+#undef BENCH_MODE
     }
 } // namespace bench
