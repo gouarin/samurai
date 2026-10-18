@@ -54,11 +54,14 @@ endforeach()
 
 # bench_set_call_sites, bench_dynamic_set and bench_set_graduation read the
 # sets of the MR-adapted meshes from files, so they compile with the interval
-# structures and the set algebra alone. generate_set_algebra_inputs writes the files. The build runs
-# it once, when the directory has no stamp, and not when the library changes,
-# so the inputs stay the same while the set algebra does. With
-# SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF building these binaries
-# no longer builds the generator, which is then run by hand.
+# structures and the set algebra alone. generate_set_algebra_inputs writes the
+# files. The build runs it when the directory has no stamp and when the
+# sources that decide the content of the files change: the generator, the
+# meshes (mr_fixtures.hpp), the list of meshes and the file format
+# (site_inputs.hpp). It does not run it again when the library changes, so the
+# inputs stay the same while the set algebra does. With
+# SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF building these binaries no
+# longer builds the generator, which is then run by hand.
 # SAMURAI_SET_ALGEBRA_INPUTS in the environment overrides the directory at run
 # time.
 option(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS "Generate the set algebra inputs when building the benchmarks that read them" ON)
@@ -70,12 +73,18 @@ foreach(target generate_set_algebra_inputs ${SAMURAI_SET_ALGEBRA_INPUT_READERS})
     target_compile_definitions(${target} PRIVATE SAMURAI_SET_ALGEBRA_INPUTS_DIR="${SAMURAI_SET_ALGEBRA_INPUTS_DIR}")
 endforeach()
 if(SAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS)
-    # Naming the generator in COMMAND, not in DEPENDS, builds it first without
-    # running it again each time it is rebuilt.
+    # The generator is named in COMMAND, which builds it first, and not in
+    # DEPENDS, which would also run it again each time it is rebuilt, that is
+    # each time a library header changes. DEPENDS lists its sources instead.
     add_custom_command(
         OUTPUT ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp
         COMMAND generate_set_algebra_inputs
         COMMAND ${CMAKE_COMMAND} -E touch ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp
+        DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/generate_set_algebra_inputs.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mr_fixtures.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/set_algebra_fixtures.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/site_inputs.hpp
         COMMENT "Generating the set algebra inputs in ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}"
     )
     add_custom_target(set_algebra_inputs DEPENDS ${SAMURAI_SET_ALGEBRA_INPUTS_DIR}/generated.stamp)

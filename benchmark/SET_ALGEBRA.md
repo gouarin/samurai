@@ -16,10 +16,12 @@ ninja -C build bench_set_operators bench_set_projection bench_set_mesh_shape \
 ```
 
 `generate_set_algebra_inputs` adapts the meshes and writes their sets to
-`build/benchmark/set_algebra_inputs/` (8 MB, a few seconds). The build runs it
-once, before the first build of the binaries that read them, and not again when the library changes, so the inputs stay the same while the
-set algebra changes. To regenerate them, delete the directory or run the
-generator. With `-DSAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF`, these
+`build/benchmark/set_algebra_inputs/` (14 MB, a few seconds). The build runs it
+before the first build of the binaries that read the files, and again when the
+generator, the meshes (`mr_fixtures.hpp`) or the list of meshes and the file
+format (`site_inputs.hpp`) change. It does not run it when the library changes,
+so the inputs stay the same while the set algebra changes. To regenerate them
+by hand, delete the directory or run the generator. With `-DSAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF`, these
 binaries build without the generator, which is then run by hand. With
 `SAMURAI_SET_ALGEBRA_INPUTS=<dir>` in the environment, the generator and the
 binaries that read the files use another directory, so two builds can share
