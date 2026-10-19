@@ -11,12 +11,24 @@
 // Args: (max_level, number of balls, stencil radius, geometry), see
 // bench::mesh_cases, and the number of ranks for a partition, see
 // bench::partition_cases.
+//
+// Each site is written once against a context, which gives its inputs and
+// runs it: Timing runs it in a benchmark, Recording computes its checksum
+// for generate_set_algebra_inputs. Before the timed loop, Timing computes
+// the checksum of the backend once and compares it with the reference the
+// generator wrote (site_checksum.hpp); on a mismatch the benchmark stops
+// with an error and bench::main returns a failure.
 
 #pragma once
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
 #include <iterator>
+#include <map>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,285 +40,325 @@
 #include "set_algebra_fixtures.hpp"
 #include "set_call_sites.hpp"
 #include "set_modes.hpp"
+#include "site_checksum.hpp"
 #include "site_inputs.hpp"
 
 namespace bench
 {
-    namespace call_sites
+    // The result of the check of each benchmark, by name: empty if the
+    // backend computed the reference sets, the mismatch otherwise. A
+    // benchmark runs several times (repetitions, iteration estimates); it is
+    // checked once.
+    inline std::map<std::string, std::string>& verifications()
     {
-        // The callback of a site only counts: the time is that of the set
-        // algebra in the library function, to set against BM_SiteOp_X or
-        // BM_Op_* of bench_set_library_ops.
-        template <class B, class Site>
-        void run(benchmark::State& state, Site&& site)
+        static std::map<std::string, std::string> results;
+        return results;
+    }
+
+    inline std::size_t verification_failures()
+    {
+        return static_cast<std::size_t>(std::count_if(verifications().begin(),
+                                                      verifications().end(),
+                                                      [](const auto& result)
+                                                      {
+                                                          return !result.second.empty();
+                                                      }));
+    }
+
+    // The context of a site in a benchmark of backend B: its inputs come
+    // from the files, and it runs in the timed loop once its checksum
+    // matches the reference.
+    template <class B, std::size_t dim>
+    class Timing
+    {
+      public:
+
+        Timing(benchmark::State& state, std::string site, bool partition)
+            : m_state(state)
+            , m_site(std::move(site))
+            , m_case(partition ? partition_case(state) : mesh_case(state))
         {
-            state.counters["sets"] = static_cast<double>(bench::run_site<B>(state, std::forward<Site>(site)));
         }
 
-        template <class B, std::size_t dim>
-        void MeshPredictionGhosts(benchmark::State& state)
+        const backend_inputs_t<B, dim>& inputs(bool moved = false)
         {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::mesh_prediction_ghosts<B>(in, sites::projected_subdomain<B>(in), f);
-                   });
+            return backend_inputs<B, dim>(m_state, moved);
+        }
+
+        const std::vector<backend_inputs_t<B, dim>>& partition()
+        {
+            return backend_partition<B, dim>(m_state);
+        }
+
+        // site(f) passes each set it evaluates to f(level, set), which
+        // returns its number of intervals. The callback only counts: the
+        // time is that of the set algebra in the library function, to set
+        // against BM_SiteOp_X or BM_Op_* of bench_set_library_ops.
+        template <class Site>
+        void traverse(Site&& site)
+        {
+            if (verify(
+                    [&]
+                    {
+                        return checksum_traverse_site<B, dim>(site);
+                    }))
+            {
+                m_state.counters["sets"] = static_cast<double>(run_site<B>(m_state, site));
+            }
+        }
+
+        // site(emit) builds level cell arrays and passes each one it keeps
+        // to emit(level, lca): the time is that of building them, `itv` and
+        // `cells` count what they keep.
+        template <class Site>
+        void build(Site&& site)
+        {
+            if (verify(
+                    [&]
+                    {
+                        return checksum_build_site<B, dim>(site);
+                    }))
+            {
+                m_state.counters["sets"] = static_cast<double>(run_build_site<B>(m_state, site));
+            }
+        }
+
+        // site(f) passes each set it evaluates to f(level, set), which only
+        // asks whether it is empty.
+        template <class Site>
+        void empty(Site&& site)
+        {
+            if (verify(
+                    [&]
+                    {
+                        return checksum_empty_site<B>(site);
+                    }))
+            {
+                m_state.counters["sets"] = static_cast<double>(run_empty_site<B>(m_state, site));
+            }
+        }
+
+      private:
+
+        // The name of the benchmark, without the backend.
+        std::string name() const
+        {
+            std::string name = m_site + "<" + std::to_string(dim) + ">";
+            for (const auto arg : {m_case.max_level, m_case.nballs, static_cast<std::size_t>(m_case.stencil_radius)})
+            {
+                name += "/" + std::to_string(arg);
+            }
+            name += "/" + std::to_string(static_cast<int>(m_case.geometry));
+            if (m_case.ranks > 0)
+            {
+                name += "/" + std::to_string(m_case.ranks);
+            }
+            return name;
+        }
+
+        template <class Checksum>
+        bool verify(Checksum&& checksum)
+        {
+            const std::string key = std::string(B::name) + "/" + name();
+            auto it               = verifications().find(key);
+            if (it == verifications().end())
+            {
+                std::string mismatch;
+                try
+                {
+                    mismatch = checksum_mismatch(checksum(), reference_checksum<dim>(m_case, m_site));
+                }
+                catch (const std::exception& e)
+                {
+                    mismatch = e.what();
+                }
+                if (!mismatch.empty())
+                {
+                    mismatch = "not the sets of the reference: " + mismatch;
+                    std::cerr << key << ": " << mismatch << std::endl;
+                }
+                it = verifications().emplace(key, std::move(mismatch)).first;
+            }
+            if (!it->second.empty())
+            {
+                m_state.SkipWithError(it->second);
+                return false;
+            }
+            return true;
+        }
+
+        benchmark::State& m_state;
+        std::string m_site;
+        MeshCase m_case;
+    };
+
+    // The context of a site in generate_set_algebra_inputs: runs it once on
+    // the inputs it is given and keeps its checksum.
+    template <class B, std::size_t dim>
+    class Recording
+    {
+      public:
+
+        using inputs_t = backend_inputs_t<B, dim>;
+
+        // A whole mesh and the same mesh moved by one step.
+        Recording(const inputs_t& in, const inputs_t& moved)
+            : m_inputs(&in)
+            , m_moved(&moved)
+        {
+        }
+
+        // The ranks of a partition.
+        explicit Recording(const std::vector<inputs_t>& ranks)
+            : m_partition(&ranks)
+        {
+        }
+
+        const inputs_t& inputs(bool moved = false) const
+        {
+            const auto* in = moved ? m_moved : m_inputs;
+            if (in == nullptr)
+            {
+                throw std::logic_error("a partition site reads a whole mesh");
+            }
+            return *in;
+        }
+
+        const std::vector<inputs_t>& partition() const
+        {
+            if (m_partition == nullptr)
+            {
+                throw std::logic_error("a site of a whole mesh reads a partition");
+            }
+            return *m_partition;
+        }
+
+        template <class Site>
+        void traverse(Site&& site)
+        {
+            m_checksum = checksum_traverse_site<B, dim>(site);
+        }
+
+        template <class Site>
+        void build(Site&& site)
+        {
+            m_checksum = checksum_build_site<B, dim>(site);
+        }
+
+        template <class Site>
+        void empty(Site&& site)
+        {
+            m_checksum = checksum_empty_site<B>(site);
+        }
+
+        const SiteChecksum& checksum() const
+        {
+            return m_checksum;
+        }
+
+      private:
+
+        const inputs_t* m_inputs                 = nullptr;
+        const inputs_t* m_moved                  = nullptr;
+        const std::vector<inputs_t>* m_partition = nullptr;
+        SiteChecksum m_checksum;
+    };
+
+    // The sites that need more than their inputs. Each takes the context
+    // ctx of the backend B.
+    namespace call_sites
+    {
+        template <class B, class Ctx>
+        void MeshPredictionGhosts(Ctx& ctx)
+        {
+            const auto& in = ctx.inputs();
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::mesh_prediction_ghosts<B>(in, sites::projected_subdomain<B>(in), f);
+                });
         }
 
         // The Cached variants read the coarse domain or subdomain the mesh
         // already stores instead of coarsening the finest one at every use:
         // the gap with the site is what caching coarse sets would save.
-        template <class B, std::size_t dim>
-        void CachedMeshPredictionGhosts(benchmark::State& state)
+        template <class B, class Ctx>
+        void CachedMeshPredictionGhosts(Ctx& ctx)
         {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::mesh_prediction_ghosts<B>(in, sites::cached_subdomain(in), f);
-                   });
+            const auto& in = ctx.inputs();
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::mesh_prediction_ghosts<B>(in, sites::cached_subdomain(in), f);
+                });
         }
 
-        template <class B, std::size_t dim>
-        void Corners(benchmark::State& state)
+        template <class B, class Ctx>
+        void OuterGhosts(Ctx& ctx)
         {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::corners<B>(in, f);
-                   });
+            const auto& in = ctx.inputs();
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::outer_ghosts<B>(in, sites::projected_domain<B>(in), f);
+                });
         }
 
-        template <class B, std::size_t dim>
-        void GhostProjection(benchmark::State& state)
+        template <class B, class Ctx>
+        void CachedOuterGhosts(Ctx& ctx)
         {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::ghost_projection<B>(in, f);
-                   });
+            const auto& in = ctx.inputs();
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::outer_ghosts<B>(in, sites::cached_domain(in), f);
+                });
         }
 
-        template <class B, std::size_t dim>
-        void GhostPrediction(benchmark::State& state)
+        template <class B, class Ctx>
+        void FieldTransfer(Ctx& ctx)
         {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::ghost_prediction<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void OuterGhosts(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::outer_ghosts<B>(in, sites::projected_domain<B>(in), f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void CachedOuterGhosts(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::outer_ghosts<B>(in, sites::cached_domain(in), f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void PeriodicGhosts(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::periodic_ghosts<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void Detail(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::detail<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void Tag(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::tag<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void Interfaces(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::interfaces<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void FieldTransfer(benchmark::State& state)
-        {
-            const auto& in     = backend_inputs<B, dim>(state);
-            const auto& new_in = backend_inputs<B, dim>(state, true);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::field_transfer<B>(in, new_in, f);
-                   });
-        }
-
-        // The sites that build level cell arrays: the time is that of
-        // building them, `itv` and `cells` count what they keep.
-        template <class B, class Site>
-        void run_build(benchmark::State& state, Site&& site)
-        {
-            state.counters["sets"] = static_cast<double>(bench::run_build_site<B>(state, std::forward<Site>(site)));
-        }
-
-        template <class B, std::size_t dim>
-        void MeshSubMesh(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             sites::mesh_sub_mesh<B>(in, emit);
-                         });
-        }
-
-        template <class B, std::size_t dim>
-        void ConstructUnion(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             sites::construct_union<B>(in, emit);
-                         });
-        }
-
-        template <class B, std::size_t dim>
-        void BuildPyramid(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             sites::build_pyramid<B>(in, emit);
-                         });
-        }
-
-        template <class B, std::size_t dim>
-        void CellArrayFromTag(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             sites::cell_array_from_tag<B>(in, emit);
-                         });
-        }
-
-        template <class B, std::size_t dim>
-        void AmrSubMesh(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             sites::amr_sub_mesh<B>(in, emit);
-                         });
+            const auto& in     = ctx.inputs();
+            const auto& new_in = ctx.inputs(true);
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::field_transfer<B>(in, new_in, f);
+                });
         }
 
         // The regions are built once, when the boundary condition is.
-        template <class B, std::size_t dim>
-        void BcCells(benchmark::State& state)
+        template <class B, class Ctx>
+        void BcCells(Ctx& ctx)
         {
-            const auto& in     = backend_inputs<B, dim>(state);
+            const auto& in     = ctx.inputs();
             const auto regions = sites::bc_regions<B>(in);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::bc_cells<B>(in, regions, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void BcCorners(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::bc_corners<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void BcFurtherGhosts(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::bc_further_ghosts<B>(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim>
-        void PerCellChildren(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::per_cell_children<B>(in, f);
-                   });
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::bc_cells<B>(in, regions, f);
+                });
         }
 
         // The ghosts without an owner are found outside the timed loop.
-        template <class B, std::size_t dim>
-        void OwnershipPerCell(benchmark::State& state)
+        template <class B, class Ctx>
+        void OwnershipPerCell(Ctx& ctx)
         {
-            const auto& in    = backend_inputs<B, dim>(state);
+            const auto& in    = ctx.inputs();
             const auto ghosts = sites::ownership_ghosts<B>(in);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       sites::ownership_per_cell<B>(in, ghosts, f);
-                   });
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    sites::ownership_per_cell<B>(in, ghosts, f);
+                });
         }
 
         // The sites on a partition run every rank in turn: the time is that
         // of all the ranks, as if one process ran them all.
-        template <class B, std::size_t dim>
-        auto partition_neighbours(const std::vector<backend_inputs_t<B, dim>>& ranks)
+        template <class Ranks>
+        auto partition_neighbours(const Ranks& ranks)
         {
-            std::vector<sites::neighbours_t<dim, typename backend_inputs_t<B, dim>::ca_t>> neighbours;
+            std::vector<decltype(sites::neighbours_of(ranks, 0))> neighbours;
             for (std::size_t r = 0; r < ranks.size(); ++r)
             {
                 neighbours.push_back(sites::neighbours_of(ranks, r));
@@ -314,277 +366,319 @@ namespace bench
             return neighbours;
         }
 
-        template <class B, std::size_t dim>
-        void PartitionFindNeighbourhood(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionFindNeighbourhood(Ctx& ctx)
         {
-            const auto& ranks      = backend_partition<B, dim>(state);
-            state.counters["sets"] = static_cast<double>(
-                bench::run_empty_site<B>(state,
-                                         [&](auto&& f)
-                                         {
-                                             for (std::size_t r = 0; r < ranks.size(); ++r)
-                                             {
-                                                 auto found = sites::find_neighbourhood<B>(ranks, r, f);
-                                                 benchmark::DoNotOptimize(found);
-                                             }
-                                         }));
+            const auto& ranks = ctx.partition();
+            ctx.empty(
+                [&](auto&& f)
+                {
+                    for (std::size_t r = 0; r < ranks.size(); ++r)
+                    {
+                        auto found = sites::find_neighbourhood<B>(ranks, r, f);
+                        benchmark::DoNotOptimize(found);
+                    }
+                });
         }
 
-        template <class B, std::size_t dim>
-        void PartitionConstructSubdomain(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionConstructSubdomain(Ctx& ctx)
         {
-            const auto& ranks = backend_partition<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             for (const auto& in : ranks)
-                             {
-                                 sites::construct_subdomain<B>(in, emit);
-                             }
-                         });
+            const auto& ranks = ctx.partition();
+            ctx.build(
+                [&](auto&& emit)
+                {
+                    for (const auto& in : ranks)
+                    {
+                        sites::construct_subdomain<B>(in, emit);
+                    }
+                });
         }
 
-        template <class B, std::size_t dim>
-        void PartitionSubdomainExchange(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionSubdomainExchange(Ctx& ctx)
         {
-            const auto& ranks     = backend_partition<B, dim>(state);
-            const auto neighbours = partition_neighbours<B, dim>(ranks);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       for (std::size_t r = 0; r < ranks.size(); ++r)
-                       {
-                           sites::subdomain_exchange<B>(ranks[r], neighbours[r], f);
-                       }
-                   });
+            const auto& ranks     = ctx.partition();
+            const auto neighbours = partition_neighbours(ranks);
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    for (std::size_t r = 0; r < ranks.size(); ++r)
+                    {
+                        sites::subdomain_exchange<B>(ranks[r], neighbours[r], f);
+                    }
+                });
         }
 
-        template <class B, std::size_t dim>
-        void PartitionMeshSubMesh(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionMeshSubMesh(Ctx& ctx)
         {
-            const auto& ranks     = backend_partition<B, dim>(state);
-            const auto neighbours = partition_neighbours<B, dim>(ranks);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             for (std::size_t r = 0; r < ranks.size(); ++r)
-                             {
-                                 sites::mesh_sub_mesh<B>(ranks[r], neighbours[r], emit);
-                             }
-                         });
+            const auto& ranks     = ctx.partition();
+            const auto neighbours = partition_neighbours(ranks);
+            ctx.build(
+                [&](auto&& emit)
+                {
+                    for (std::size_t r = 0; r < ranks.size(); ++r)
+                    {
+                        sites::mesh_sub_mesh<B>(ranks[r], neighbours[r], emit);
+                    }
+                });
         }
 
-        template <class B, std::size_t dim>
-        void PartitionInterfaces(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionInterfaces(Ctx& ctx)
         {
-            const auto& ranks     = backend_partition<B, dim>(state);
-            const auto neighbours = partition_neighbours<B, dim>(ranks);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       for (std::size_t r = 0; r < ranks.size(); ++r)
-                       {
-                           sites::interfaces<B>(ranks[r], neighbours[r], f);
-                       }
-                   });
+            const auto& ranks     = ctx.partition();
+            const auto neighbours = partition_neighbours(ranks);
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    for (std::size_t r = 0; r < ranks.size(); ++r)
+                    {
+                        sites::interfaces<B>(ranks[r], neighbours[r], f);
+                    }
+                });
         }
 
-        template <class B, std::size_t dim>
-        void PartitionPeriodicGhosts(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionPeriodicGhosts(Ctx& ctx)
         {
-            const auto& ranks     = backend_partition<B, dim>(state);
-            const auto neighbours = partition_neighbours<B, dim>(ranks);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       for (std::size_t r = 0; r < ranks.size(); ++r)
-                       {
-                           sites::periodic_ghosts<B>(ranks[r], neighbours[r], f);
-                       }
-                   });
+            const auto& ranks     = ctx.partition();
+            const auto neighbours = partition_neighbours(ranks);
+            ctx.traverse(
+                [&](auto&& f)
+                {
+                    for (std::size_t r = 0; r < ranks.size(); ++r)
+                    {
+                        sites::periodic_ghosts<B>(ranks[r], neighbours[r], f);
+                    }
+                });
         }
 
         // Every rank peels towards each of its neighbours, from the partition
         // as it is (see sites::diffusion_peel).
-        template <class B, std::size_t dim>
-        void PartitionDiffusionPeel(benchmark::State& state)
+        template <class B, class Ctx>
+        void PartitionDiffusionPeel(Ctx& ctx)
         {
-            const auto& ranks     = backend_partition<B, dim>(state);
-            const auto neighbours = partition_neighbours<B, dim>(ranks);
+            const auto& ranks     = ctx.partition();
+            const auto neighbours = partition_neighbours(ranks);
             std::vector<double> loads;
             for (const auto& in : ranks)
             {
                 loads.push_back(sites::peel_load<B>(in));
             }
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             for (std::size_t r = 0; r < ranks.size(); ++r)
-                             {
-                                 for (const auto* neighbour : neighbours[r])
-                                 {
-                                     sites::diffusion_peel<B>(ranks[r], *neighbour, loads[r], emit);
-                                 }
-                             }
-                         });
-        }
-
-        // The modes of set_modes.hpp, one benchmark per function.
-        template <class B, std::size_t dim, auto Mode>
-        void TraverseMode(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run<B>(state,
-                   [&](auto&& f)
-                   {
-                       Mode(in, f);
-                   });
-        }
-
-        template <class B, std::size_t dim, auto Mode>
-        void BuildMode(benchmark::State& state)
-        {
-            const auto& in = backend_inputs<B, dim>(state);
-            run_build<B>(state,
-                         [&](auto&& emit)
-                         {
-                             Mode(in, emit);
-                         });
-        }
-
-        template <class B, std::size_t dim, auto Mode>
-        void EmptyMode(benchmark::State& state)
-        {
-            const auto& in         = backend_inputs<B, dim>(state);
-            state.counters["sets"] = static_cast<double>(bench::run_empty_site<B>(state,
-                                                                                  [&](auto&& f)
-                                                                                  {
-                                                                                      Mode(in, f);
-                                                                                  }));
+            ctx.build(
+                [&](auto&& emit)
+                {
+                    for (std::size_t r = 0; r < ranks.size(); ++r)
+                    {
+                        for (const auto* neighbour : neighbours[r])
+                        {
+                            sites::diffusion_peel<B>(ranks[r], *neighbour, loads[r], emit);
+                        }
+                    }
+                });
         }
     } // namespace call_sites
 
-    // Registers the sites for which keep(name, dim) holds, all of them by
-    // default, on the meshes of `cases`; the periodic ghosts only on the
-    // periodic meshes, the others have none.
-    template <class B, std::size_t dim, class Keep = bool (*)(std::string_view, std::size_t)>
-    void register_call_sites(
-        const std::vector<MeshCase>& cases,
-        Keep&& keep =
-            [](std::string_view, std::size_t)
+    // Calls v(name, periodic_only, run) for each site of a whole mesh and
+    // each mode, where run(ctx) runs it in the context ctx (Timing or
+    // Recording of B in dim). periodic_only: the site has nothing to do on
+    // a mesh that is not periodic.
+    template <class B, std::size_t dim, class V>
+    void for_each_call_site(V&& v)
+    {
+        // A site or mode that only reads the inputs of the mesh: KIND is
+        // traverse, build or empty (see Timing).
+#define BENCH_SIMPLE(NAME, KIND, FUNCTION, PERIODIC_ONLY) \
+    v(NAME,                                               \
+      PERIODIC_ONLY,                                      \
+      [](auto& ctx)                                       \
+      {                                                   \
+          const auto& in = ctx.inputs();                  \
+          ctx.KIND(                                       \
+              [&](auto&& f)                               \
+              {                                           \
+                  FUNCTION<B>(in, f);                     \
+              });                                         \
+      })
+#define BENCH_SITE(NAME, FUNCTION) \
+    v(NAME,                        \
+      false,                       \
+      [](auto& ctx)                \
+      {                            \
+          FUNCTION<B>(ctx);        \
+      })
+        BENCH_SITE("BM_Site_MeshPredictionGhosts", call_sites::MeshPredictionGhosts);
+        BENCH_SITE("BM_SiteCached_MeshPredictionGhosts", call_sites::CachedMeshPredictionGhosts);
+        BENCH_SIMPLE("BM_Site_Corners", traverse, sites::corners, false);
+        BENCH_SIMPLE("BM_Site_GhostProjection", traverse, sites::ghost_projection, false);
+        BENCH_SIMPLE("BM_Site_GhostPrediction", traverse, sites::ghost_prediction, false);
+        BENCH_SITE("BM_Site_OuterGhosts", call_sites::OuterGhosts);
+        BENCH_SITE("BM_SiteCached_OuterGhosts", call_sites::CachedOuterGhosts);
+        BENCH_SIMPLE("BM_Site_PeriodicGhosts", traverse, sites::periodic_ghosts, true);
+        BENCH_SIMPLE("BM_Site_Detail", traverse, sites::detail, false);
+        BENCH_SIMPLE("BM_Site_Tag", traverse, sites::tag, false);
+        BENCH_SITE("BM_Site_FieldTransfer", call_sites::FieldTransfer);
+        BENCH_SIMPLE("BM_Site_Interfaces", traverse, sites::interfaces, false);
+        BENCH_SIMPLE("BM_Site_MeshSubMesh", build, sites::mesh_sub_mesh, false);
+        BENCH_SIMPLE("BM_Site_ConstructUnion", build, sites::construct_union, false);
+        BENCH_SIMPLE("BM_Site_BuildPyramid", build, sites::build_pyramid, false);
+        BENCH_SIMPLE("BM_Site_CellArrayFromTag", build, sites::cell_array_from_tag, false);
+        BENCH_SIMPLE("BM_Site_AmrSubMesh", build, sites::amr_sub_mesh, false);
+        BENCH_SITE("BM_Site_BcCells", call_sites::BcCells);
+        BENCH_SIMPLE("BM_Site_BcCorners", traverse, sites::bc_corners, false);
+        BENCH_SIMPLE("BM_Site_BcFurtherGhosts", traverse, sites::bc_further_ghosts, false);
+        BENCH_SIMPLE("BM_Site_PerCellChildren", traverse, sites::per_cell_children, false);
+        BENCH_SITE("BM_Site_OwnershipPerCell", call_sites::OwnershipPerCell);
+
+        BENCH_SIMPLE("BM_Mode_Traverse", traverse, modes::traverse_proj_cells, false);
+        BENCH_SIMPLE("BM_Mode_Materialize", build, modes::materialize_proj_cells, false);
+        BENCH_SIMPLE("BM_Mode_Build", build, modes::build_proj_cells, false);
+        BENCH_SIMPLE("BM_Mode_EmptyHit", empty, modes::empty_hit, false);
+        BENCH_SIMPLE("BM_Mode_EmptyMiss", empty, modes::empty_miss, false);
+        BENCH_SIMPLE("BM_Mode_Contract", traverse, modes::contract, false);
+        BENCH_SIMPLE("BM_Mode_ContractMasked", traverse, modes::contract_masked, false);
+        BENCH_SIMPLE("BM_Mode_ExpandUniform", traverse, modes::expand_uniform, false);
+        BENCH_SIMPLE("BM_Mode_ExpandAxes", traverse, modes::expand_axes, false);
+        BENCH_SIMPLE("BM_Mode_ExpandMasked", traverse, modes::expand_masked, false);
+        BENCH_SIMPLE("BM_Mode_OnMixedLevels", traverse, modes::on_mixed_levels, false);
+        BENCH_SIMPLE("BM_Mode_OnSameLevel", traverse, modes::on_same_level, false);
+        BENCH_SIMPLE("BM_Mode_NestedOn", traverse, modes::nested_on, false);
+        BENCH_SIMPLE("BM_Mode_FlatOn", traverse, modes::flat_on, false);
+        BENCH_SIMPLE("BM_Mode_IntersectionSelfOn", traverse, modes::intersection_self_on, false);
+        BENCH_SIMPLE("BM_Mode_SelfOn", traverse, modes::self_on, false);
+#undef BENCH_SIMPLE
+#undef BENCH_SITE
+    }
+
+    // The same for the sites of an MPI rank on a partition: those that only
+    // run with MPI, and the variants with the neighbours of the sites that
+    // have one.
+    template <class B, std::size_t dim, class V>
+    void for_each_partition_site(V&& v)
+    {
+        const auto site = [&](const char* name, auto run, bool periodic_only = false)
+        {
+            v(name, periodic_only, run);
+        };
+        site("BM_Site_FindNeighbourhood",
+             [](auto& ctx)
+             {
+                 call_sites::PartitionFindNeighbourhood<B>(ctx);
+             });
+        site("BM_Site_ConstructSubdomain",
+             [](auto& ctx)
+             {
+                 call_sites::PartitionConstructSubdomain<B>(ctx);
+             });
+        site("BM_Site_SubdomainExchange",
+             [](auto& ctx)
+             {
+                 call_sites::PartitionSubdomainExchange<B>(ctx);
+             });
+        site("BM_Site_MeshSubMesh",
+             [](auto& ctx)
+             {
+                 call_sites::PartitionMeshSubMesh<B>(ctx);
+             });
+        site("BM_Site_Interfaces",
+             [](auto& ctx)
+             {
+                 call_sites::PartitionInterfaces<B>(ctx);
+             });
+        site(
+            "BM_Site_PeriodicGhosts",
+            [](auto& ctx)
+            {
+                call_sites::PartitionPeriodicGhosts<B>(ctx);
+            },
+            true);
+        site("BM_Site_DiffusionPeel",
+             [](auto& ctx)
+             {
+                 call_sites::PartitionDiffusionPeel<B>(ctx);
+             });
+    }
+
+    namespace detail
+    {
+        template <class B, std::size_t dim, class Keep>
+        void register_sites(const std::vector<MeshCase>& cases, bool partition, Keep&& keep)
+        {
+            const auto add = [&](const char* site, bool periodic_only, auto run)
+            {
+                std::vector<MeshCase> site_cases;
+                std::copy_if(cases.begin(),
+                             cases.end(),
+                             std::back_inserter(site_cases),
+                             [&](const MeshCase& c)
+                             {
+                                 return (!periodic_only || c.geometry == Geometry::periodic) && keep(site, dim, c);
+                             });
+                if (site_cases.empty())
+                {
+                    return;
+                }
+                const std::string name = std::string(B::name) + "/" + site + "<" + std::to_string(dim) + ">";
+                mesh_args(benchmark::RegisterBenchmark(name,
+                                                       [site = std::string(site), partition, run](benchmark::State& state)
+                                                       {
+                                                           Timing<B, dim> ctx(state, site, partition);
+                                                           run(ctx);
+                                                       }),
+                          site_cases);
+            };
+            if (partition)
+            {
+                for_each_partition_site<B, dim>(add);
+            }
+            else
+            {
+                for_each_call_site<B, dim>(add);
+            }
+        }
+
+        inline bool keep_all(std::string_view, std::size_t, const MeshCase&)
         {
             return true;
-        })
-    {
-        std::vector<MeshCase> periodic_cases;
-        std::copy_if(cases.begin(),
-                     cases.end(),
-                     std::back_inserter(periodic_cases),
-                     [](const MeshCase& c)
-                     {
-                         return c.geometry == Geometry::periodic;
-                     });
-        const auto add = [&](const char* site, void (*bm)(benchmark::State&), bool periodic_only = false)
-        {
-            const auto& site_cases = periodic_only ? periodic_cases : cases;
-            if (!keep(site, dim) || site_cases.empty())
-            {
-                return;
-            }
-            const std::string name = std::string(B::name) + "/" + site + "<" + std::to_string(dim) + ">";
-            mesh_args(benchmark::RegisterBenchmark(name, bm), site_cases);
-        };
-        add("BM_Site_MeshPredictionGhosts", call_sites::MeshPredictionGhosts<B, dim>);
-        add("BM_SiteCached_MeshPredictionGhosts", call_sites::CachedMeshPredictionGhosts<B, dim>);
-        add("BM_Site_Corners", call_sites::Corners<B, dim>);
-        add("BM_Site_GhostProjection", call_sites::GhostProjection<B, dim>);
-        add("BM_Site_GhostPrediction", call_sites::GhostPrediction<B, dim>);
-        add("BM_Site_OuterGhosts", call_sites::OuterGhosts<B, dim>);
-        add("BM_SiteCached_OuterGhosts", call_sites::CachedOuterGhosts<B, dim>);
-        add("BM_Site_PeriodicGhosts", call_sites::PeriodicGhosts<B, dim>, true);
-        add("BM_Site_Detail", call_sites::Detail<B, dim>);
-        add("BM_Site_Tag", call_sites::Tag<B, dim>);
-        add("BM_Site_FieldTransfer", call_sites::FieldTransfer<B, dim>);
-        add("BM_Site_Interfaces", call_sites::Interfaces<B, dim>);
-        add("BM_Site_MeshSubMesh", call_sites::MeshSubMesh<B, dim>);
-        add("BM_Site_ConstructUnion", call_sites::ConstructUnion<B, dim>);
-        add("BM_Site_BuildPyramid", call_sites::BuildPyramid<B, dim>);
-        add("BM_Site_CellArrayFromTag", call_sites::CellArrayFromTag<B, dim>);
-        add("BM_Site_AmrSubMesh", call_sites::AmrSubMesh<B, dim>);
-        add("BM_Site_BcCells", call_sites::BcCells<B, dim>);
-        add("BM_Site_BcCorners", call_sites::BcCorners<B, dim>);
-        add("BM_Site_BcFurtherGhosts", call_sites::BcFurtherGhosts<B, dim>);
-        add("BM_Site_PerCellChildren", call_sites::PerCellChildren<B, dim>);
-        add("BM_Site_OwnershipPerCell", call_sites::OwnershipPerCell<B, dim>);
+        }
+    } // namespace detail
 
-        using in_t = backend_inputs_t<B, dim>;
-        // A function template cannot be a template argument: each mode is
-        // wrapped in a lambda without capture.
-#define BENCH_MODE(KIND, NAME, FUNCTION)                      \
-    add("BM_Mode_" NAME,                                      \
-        call_sites::KIND##Mode<B,                             \
-                               dim,                           \
-                               [](const in_t& in, auto& f)    \
-                               {                              \
-                                   modes::FUNCTION<B>(in, f); \
-                               }>)
-        BENCH_MODE(Traverse, "Traverse", traverse_proj_cells);
-        BENCH_MODE(Build, "Materialize", materialize_proj_cells);
-        BENCH_MODE(Build, "Build", build_proj_cells);
-        BENCH_MODE(Empty, "EmptyHit", empty_hit);
-        BENCH_MODE(Empty, "EmptyMiss", empty_miss);
-        BENCH_MODE(Traverse, "Contract", contract);
-        BENCH_MODE(Traverse, "ContractMasked", contract_masked);
-        BENCH_MODE(Traverse, "ExpandUniform", expand_uniform);
-        BENCH_MODE(Traverse, "ExpandAxes", expand_axes);
-        BENCH_MODE(Traverse, "ExpandMasked", expand_masked);
-        BENCH_MODE(Traverse, "OnMixedLevels", on_mixed_levels);
-        BENCH_MODE(Traverse, "OnSameLevel", on_same_level);
-        BENCH_MODE(Traverse, "NestedOn", nested_on);
-        BENCH_MODE(Traverse, "FlatOn", flat_on);
-        BENCH_MODE(Traverse, "IntersectionSelfOn", intersection_self_on);
-        BENCH_MODE(Traverse, "SelfOn", self_on);
-#undef BENCH_MODE
+    // Registers each site on the meshes c of `cases` for which
+    // keep(name, dim, c) holds, all of them by default; the periodic ghosts
+    // only on the periodic meshes, the others have none.
+    template <class B, std::size_t dim, class Keep = bool (*)(std::string_view, std::size_t, const MeshCase&)>
+    void register_call_sites(const std::vector<MeshCase>& cases, Keep&& keep = detail::keep_all)
+    {
+        detail::register_sites<B, dim>(cases, false, keep);
     }
 
     // Registers the sites of an MPI rank on the partitions of `cases`
-    // (partition_cases), as <B::name>/BM_Site_X<dim>/<args>/<ranks>: those
-    // that only run with MPI, and the variants with the neighbours of the
-    // sites that have one. The periodic ghosts only on the periodic
-    // partitions.
-    template <class B, std::size_t dim, class Keep = bool (*)(std::string_view, std::size_t)>
-    void register_partition_sites(
-        const std::vector<MeshCase>& cases,
-        Keep&& keep =
-            [](std::string_view, std::size_t)
-        {
-            return true;
-        })
+    // (partition_cases), as <B::name>/BM_Site_X<dim>/<args>/<ranks>, with
+    // the same filter. The periodic ghosts only on the periodic partitions.
+    template <class B, std::size_t dim, class Keep = bool (*)(std::string_view, std::size_t, const MeshCase&)>
+    void register_partition_sites(const std::vector<MeshCase>& cases, Keep&& keep = detail::keep_all)
     {
-        std::vector<MeshCase> periodic_cases;
-        std::copy_if(cases.begin(),
-                     cases.end(),
-                     std::back_inserter(periodic_cases),
-                     [](const MeshCase& c)
-                     {
-                         return c.geometry == Geometry::periodic;
-                     });
-        const auto add = [&](const char* site, void (*bm)(benchmark::State&), bool periodic_only = false)
+        detail::register_sites<B, dim>(cases, true, keep);
+    }
+
+    // The main of the binaries that register sites: fails if a backend
+    // computed other sets than the reference.
+    inline int run_benchmarks(int argc, char** argv)
+    {
+        benchmark::Initialize(&argc, argv);
+        if (benchmark::ReportUnrecognizedArguments(argc, argv))
         {
-            const auto& site_cases = periodic_only ? periodic_cases : cases;
-            if (!keep(site, dim) || site_cases.empty())
-            {
-                return;
-            }
-            const std::string name = std::string(B::name) + "/" + site + "<" + std::to_string(dim) + ">";
-            mesh_args(benchmark::RegisterBenchmark(name, bm), site_cases);
-        };
-        add("BM_Site_FindNeighbourhood", call_sites::PartitionFindNeighbourhood<B, dim>);
-        add("BM_Site_ConstructSubdomain", call_sites::PartitionConstructSubdomain<B, dim>);
-        add("BM_Site_SubdomainExchange", call_sites::PartitionSubdomainExchange<B, dim>);
-        add("BM_Site_MeshSubMesh", call_sites::PartitionMeshSubMesh<B, dim>);
-        add("BM_Site_Interfaces", call_sites::PartitionInterfaces<B, dim>);
-        add("BM_Site_PeriodicGhosts", call_sites::PartitionPeriodicGhosts<B, dim>, true);
-        add("BM_Site_DiffusionPeel", call_sites::PartitionDiffusionPeel<B, dim>);
+            return EXIT_FAILURE;
+        }
+        benchmark::RunSpecifiedBenchmarks();
+        benchmark::Shutdown();
+        if (const auto failures = verification_failures(); failures > 0)
+        {
+            std::cerr << failures << " benchmark(s) computed other sets than the reference, see above" << std::endl;
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
     }
 } // namespace bench

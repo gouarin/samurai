@@ -50,34 +50,46 @@ namespace
         return cases;
     }
 
-    // Without the sites the dynamic algebra gets wrong. On 2026-10-18:
+    // Without the sites the dynamic algebra gets wrong: their checksums
+    // differ from the reference (site_checksum.hpp). On 2026-10-19:
     // - the prediction ghosts of the mesh construction, alone
-    //   (MeshPredictionGhosts) or within MRMesh::update_sub_mesh_impl
-    //   (MeshSubMesh): samurai::dyn::expand of a set projection returned
-    //   other cells than the static expansion, took 290 s per iteration in
-    //   3D against 1 to 2 ms, and failed the assertion n_traversers == 1 of
+    //   (MeshPredictionGhosts, and its Cached variant) or within
+    //   MRMesh::update_sub_mesh_impl (MeshSubMesh, on whole meshes and on
+    //   partitions): samurai::dyn::expand of a set projection returns other
+    //   cells than the static expansion, takes 290 s per iteration in 3D
+    //   against 1 to 2 ms, and fails the assertion n_traversers == 1 of
     //   Projection<DynamicSetAdaptor> in a build with assertions;
-    // - the contraction along every axis (Mode_Contract): samurai::dyn::contract
-    //   returned other cells than the static one in 3D, which matches
-    //   domain_boundary(mesh, level);
-    // - the subdomain exchange of a partition in 3D (SubdomainExchange): in
-    //   outer_subdomain_corner, the layer band
-    //   difference(translate(domain, e_z), translate(domain, 0)), where both
-    //   translations read the same node self(domain), came out empty along
-    //   z, where the static algebra and the library find the boundary layer
-    //   (16 cells at level 2 on the 2-rank partition); with a node per
-    //   translation it is right.
-    bool keep(std::string_view site, std::size_t dim)
+    // - the contraction along every axis in 3D (Mode_Contract):
+    //   samurai::dyn::contract returns other cells than the static one,
+    //   which matches domain_boundary(mesh, level);
+    // - a translation of a node that the same expression also reads
+    //   untranslated: the subdomain exchange of a partition in 3D
+    //   (SubdomainExchange), in outer_subdomain_corner, where the layer band
+    //   difference(translate(domain, e_z), translate(domain, 0)) comes out
+    //   empty along z (16 cells at level 2 on the 2-rank partition), and the
+    //   boundary ghosts of Mode_NestedOn and Mode_FlatOn on the domain with a
+    //   hole, difference(domain2, translate(domain2, -direction)), which miss
+    //   cells at the min level. With a node per use both are right. The
+    //   periodic partition has no outer boundary, so its subdomain exchange
+    //   is right.
+    bool keep(std::string_view site, std::size_t dim, const bench::MeshCase& c)
     {
-        constexpr std::array<std::string_view, 4> excluded{"BM_Site_MeshPredictionGhosts",
+        constexpr std::array<std::string_view, 3> excluded{"BM_Site_MeshPredictionGhosts",
                                                            "BM_SiteCached_MeshPredictionGhosts",
-                                                           "BM_Site_MeshSubMesh",
-                                                           "BM_Mode_Contract"};
-        if (dim == 3 && site == "BM_Site_SubdomainExchange")
+                                                           "BM_Site_MeshSubMesh"};
+        if (std::find(excluded.begin(), excluded.end(), site) != excluded.end())
         {
             return false;
         }
-        return std::find(excluded.begin(), excluded.end(), site) == excluded.end();
+        if (dim == 3 && site == "BM_Mode_Contract")
+        {
+            return false;
+        }
+        if (dim == 3 && site == "BM_Site_SubdomainExchange" && c.geometry != bench::Geometry::periodic)
+        {
+            return false;
+        }
+        return !(c.geometry == bench::Geometry::hole && (site == "BM_Mode_NestedOn" || site == "BM_Mode_FlatOn"));
     }
 
     // The partitions of the same meshes into 4 subdomains, in the box and
@@ -110,4 +122,7 @@ namespace
     const bool registered_dynamic = register_backend<bench::SamuraiDynamic>();
 } // namespace
 
-BENCHMARK_MAIN();
+int main(int argc, char** argv)
+{
+    return bench::run_benchmarks(argc, argv);
+}
