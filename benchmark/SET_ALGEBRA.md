@@ -2,7 +2,8 @@
 
 These benchmarks measure the cost of the set algebra (`include/samurai/subset/`)
 and its weight in the operations samurai runs at every time step. They are the
-baseline for the work on the algebra: rerun them before and after a change.
+baseline for work on the algebra: run them before and after a change, and
+compare the medians.
 
 ## Running
 
@@ -15,156 +16,325 @@ ninja -C build bench_set_operators bench_set_projection bench_set_mesh_shape \
 ./build/benchmark/bench_set_call_sites --benchmark_filter='<3>'
 ```
 
-`generate_set_algebra_inputs` adapts the meshes, splits some of them into
-subdomains, and writes their sets to `build/benchmark/set_algebra_inputs/`
-(47 MB, 5 seconds; with the sweep, 122 MB, 21 seconds). The build runs it
-before the first build of the binaries that read the files, and again when the
-generator, the meshes (`mr_fixtures.hpp`), the list of meshes and the file
-format (`site_inputs.hpp`) or the sites that build the partitions
-(`set_call_sites.hpp`) change. It does not run it when the library changes,
-so the inputs stay the same while the set algebra changes. To regenerate them
-by hand, delete the directory or run the generator. With `-DSAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF`, these
-binaries build without the generator, which is then run by hand. With
-`SAMURAI_SET_ALGEBRA_INPUTS=<dir>` in the environment, the generator and the
-binaries that read the files use another directory, so two builds can share
-one set of inputs.
+For numbers worth comparing, keep the machine idle, run with
+`--benchmark_repetitions=5 --benchmark_report_aggregates_only=true` and read
+the medians.
 
-For numbers worth comparing, use `--benchmark_repetitions=5
---benchmark_report_aggregates_only=true`, read the medians, and keep the machine idle.
+Every benchmark reports:
 
-Every benchmark reports `itv` and `cells` (what the set emitted per iteration)
-and `t/itv`, the time per emitted interval. A site that builds level cell
-arrays reports the intervals and cells of the arrays it keeps; a benchmark
-that only asks whether sets are empty reports `nonempty` instead. The benchmarks on adapted meshes
-also report the mesh: `leaves`, `leaf_itv` and `levels`.
+- `itv` and `cells`: what the sets emitted in one iteration. A site that builds
+  level cell arrays counts the arrays it keeps; a benchmark that only asks
+  whether sets are empty reports `nonempty` instead.
+- `t/itv`: the time per emitted interval, the figure to compare across shapes,
+  operators, dimensions and backends.
+- on an adapted mesh, the mesh itself: `leaves`, `leaf_itv` and `levels`.
 
-Most binaries need only samurai's interval structures (`LevelCellArray`,
-`CellArray`, `ListOfIntervals`, `Box`) and the set algebra, so they still build
-if the algebra is optimized or replaced. Their inputs come from these headers:
+### Inputs
 
-- `set_algebra_fixtures.hpp` holds the traversal and its counters, and
-  synthetic `LevelCellArray`s with a controlled shape. A synthetic benchmark
-  takes the level of its sets as its first argument: 20 in 1D, 11 in 2D and
-  8 in 3D, or the levels of the sweep.
-- `site_inputs.hpp` holds `SiteInputs`, the sets the library call sites read
-  from an MR-adapted mesh (cells, ghosts, reference, projection cells, union,
-  domain and subdomain pyramids, corners, the cells of the next adaptation
-  step before graduation and the four sets `update_cell_array_from_tag` builds
-  them from), and reads and writes the files. The
-  file format is described at the top of the header, so another implementation
-  of the algebra can run on the same inputs.
-- `set_call_sites.hpp` holds the call site expressions copied from the library,
-  which read their operands from `SiteInputs`. They are written once against
-  a backend of the set algebra (see [Adding a backend](#adding-a-backend)).
-- `set_algebra_backend.hpp` defines the backend interface and samurai's static
-  algebra as a backend (`static`); `set_algebra_dynamic_backend.hpp` holds the
-  dynamic algebra (`dynamic`).
-- `set_modes.hpp` holds the ways to consume a set and the operators the call
-  sites do not cover, each paired with a variant that gives the same cells.
-- `call_site_benchmarks.hpp` holds the benchmarks of the call sites and of the
-  modes, and registers them for one backend.
+`bench_set_call_sites`, `bench_dynamic_set` and `bench_set_graduation` read
+their sets from files that `generate_set_algebra_inputs` writes to
+`build/benchmark/set_algebra_inputs/` (50 MB, 5 seconds; with the sweep,
+138 MB, 24 seconds). The generator adapts the meshes, splits some of them into
+subdomains, writes their sets, and writes the reference checksums of the call
+sites ([Result verification](#result-verification)).
 
-`mr_fixtures.hpp` builds the MR-adapted meshes, refined around the surfaces of K
-balls, copies their sets into `SiteInputs`, and splits them into subdomains
-([Partitions](#partitions)). Only `generate_set_algebra_inputs` and
-`bench_set_library_ops` include it.
+The build runs the generator before the first build of these binaries, and
+again when one of the sources that decide the content of the files changes:
+the generator, the meshes (`mr_fixtures.hpp`), the list of meshes and the file
+format (`site_inputs.hpp`), the sites and modes (`set_call_sites.hpp`,
+`set_modes.hpp`, `call_site_benchmarks.hpp`) and the checksum
+(`site_checksum.hpp`). A change to the library does not trigger it, so the
+inputs and the reference stay fixed while the set algebra changes.
+
+- To regenerate the files by hand, delete the directory or run the generator.
+- With `-DSAMURAI_BENCHMARK_GENERATE_SET_ALGEBRA_INPUTS=OFF`, the binaries
+  build without the generator, which you then run by hand.
+- With `SAMURAI_SET_ALGEBRA_INPUTS=<dir>` in the environment, the generator and
+  the binaries use another directory, so two builds can share one set of
+  inputs.
+
+## What each binary measures
 
 | Binary | Needs | Question |
 | --- | --- | --- |
 | `bench_set_operators` | algebra | Cost of the operators at one level: the floor of a traversal against a raw loop, the arity of intersection and union (with in-phase operands and nested binary operators as controls), and the expansion width. |
 | `bench_set_projection` | algebra | Cost of `.on()`: coarsening against the level difference, compared with the same coarse set already built and with building it once; refinement as a control; coarsening of an N-ary intersection, of a chained projection and inside an expansion. |
 | `bench_set_mesh_shape` | algebra | Effect of the shape of a level: the same cells cut into K stripes along each axis, and the same front cut into P subdomains along each axis. |
-| `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step or mesh construction, copied from their source (`BM_Site_*`), on whole meshes and on the subdomains of their partitions, two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`), and the ways to consume a set (`BM_Mode_*`), for each registered backend. |
-| `bench_dynamic_set` | algebra, input files | The same sites with the `static` and `dynamic` backends, on the main 2D and 3D meshes on each geometry, on their partitions into 4 subdomains, and with the sweep on its meshes: the price of the runtime algebra. |
+| `bench_set_call_sites` | algebra, input files | The expressions of the library functions that run at every time step or mesh construction, copied from their source (`BM_Site_*`), on whole meshes and on partitions; two variants that read coarse sets the mesh already stores (`BM_SiteCached_*`); and the ways to consume a set (`BM_Mode_*`), for each registered backend. |
+| `bench_dynamic_set` | algebra, input files | The same sites with the `static` and `dynamic` backends, on the main 2D and 3D meshes of each geometry, their partitions into 4 subdomains and, with the sweep, the sweep meshes: the price of the runtime algebra. |
 | `bench_set_graduation` | algebra, `make_graduation`, input files | Cost of `make_graduation` on the cells the adaptation passes to it, before graduation. It reports the cells before (`cells_in`) and after (`cells_out`). |
-| `bench_set_library_ops` | mesh, MR adaptation, fields, schemes | The sets of `BM_Site_*` with the library's field operator (`BM_SiteOp_*`), and the library operations themselves (`BM_Op_*`), on the meshes and arguments of `bench_set_call_sites`. |
+| `bench_set_library_ops` | mesh, MR adaptation, fields, schemes | The sets of `BM_Site_*` with the library's field operator (`BM_SiteOp_*`), and the library operations themselves (`BM_Op_*`), on the meshes and arguments of `bench_set_call_sites`. `BM_Op_AdaptStep` and `BM_Op_MeshConstruction` also report the time of their phases, read from samurai's timers, in ms per iteration. |
+
+Most binaries need only samurai's interval structures (`LevelCellArray`,
+`CellArray`, `ListOfIntervals`, `Box`) and the set algebra (the Needs
+column), so they still build when the algebra is optimized or replaced. The
+headers:
+
+- `set_algebra_fixtures.hpp`: the traversal and its counters, and synthetic
+  `LevelCellArray`s of controlled shape. A synthetic benchmark takes the level
+  of its sets as first argument: 20 in 1D, 11 in 2D and 8 in 3D, or the levels
+  of the sweep.
+- `site_inputs.hpp`: `SiteInputs`, the sets the call sites read from an adapted
+  mesh (cells, ghosts, reference, projection cells, union, domain and subdomain
+  pyramids, corners, the cells of the next adaptation step before graduation
+  and the four sets `update_cell_array_from_tag` builds them from), the list of
+  meshes, and the input files. The file format is described at the top of the
+  header, so that another implementation of the algebra can read the same
+  inputs.
+- `set_call_sites.hpp`: the call site expressions copied from the library,
+  written against a backend ([Adding a backend](#adding-a-backend)).
+- `set_modes.hpp`: the ways to consume a set and the operators the call sites
+  do not cover, each paired with a variant that gives the same cells.
+- `set_algebra_backend.hpp`: the backend interface and samurai's static algebra
+  as a backend (`static`); `set_algebra_dynamic_backend.hpp` holds the dynamic
+  algebra (`dynamic`).
+- `call_site_benchmarks.hpp`: the list of sites and modes, their benchmarks,
+  and their registration for one backend.
+- `site_checksum.hpp`: the checksum of what a site computes and its files.
+- `mr_fixtures.hpp`: the MR-adapted meshes and their partitions. Only
+  `generate_set_algebra_inputs` and `bench_set_library_ops` include it.
 
 `BM_Site_X` (`bench_set_call_sites`) divided by `BM_SiteOp_X`
 (`bench_set_library_ops`) is the share of the set algebra in the function that
-evaluates X. The ratio compares a small translation unit with a large one, in
-which GCC 15 may run out of its inlining budget (`--param inline-unit-growth`)
-and keep the construction of the traversers out of line: the same 3D
-expressions then ran up to 1.5 times slower (measured on 2026-10-14). An
-application that includes the mesh and the schemes is in the large case, so
-the ratio may understate the share of the algebra there.
-`BM_Op_AdaptStep` and `BM_Op_MeshConstruction` also report the time of their
-phases, read from samurai's timers, in ms per iteration.
+evaluates X. The ratio sets a small translation unit against a large one, in
+which GCC 15 may run out of inlining budget (`--param inline-unit-growth`) and
+keep the construction of the traversers out of line: the same 3D expressions
+then ran up to 1.5 times slower (measured on 2026-10-14). An application that
+includes the mesh and the schemes is in the large case, so the ratio may
+understate the share of the algebra there.
 
-### Sweep over the level
+## Meshes
 
-To draw the time against the number of intervals, configure with
-`-DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON`. The synthetic benchmarks
-(`bench_set_operators`, `bench_set_projection`, `bench_set_mesh_shape`) then
-run at a range of levels instead of one, and the generator writes one more
-mesh per max level, which the call sites read
-([Meshes](#meshes)). The option is off by default because the largest meshes
-of the sweep take most of the generation time and of the disk space. The
-level is the first argument of every benchmark, so a filter selects one curve:
+A benchmark on an adapted mesh takes four arguments: `max_level`, the number of
+balls the mesh is refined around, the max stencil radius, and the geometry
+(`bench::Geometry`: 0 for the unit box, 1 for the unit box with a hole, 2 for
+the unit box periodic along every axis). `static/BM_Site_Tag<3>/7/8/1/0` runs
+the static backend on the 3D mesh of max level 7 refined around 8 balls in the
+unit box, with a max stencil radius of 1. `bench::mesh_cases`
+(`site_inputs.hpp`) lists the meshes:
 
-```bash
-cmake -S . -B build -DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON
-ninja -C build bench_set_operators bench_set_call_sites
-./build/benchmark/bench_set_operators --benchmark_filter='BM_Self<2, Shape::shell>/'
-./build/benchmark/bench_set_call_sites --benchmark_filter='^static/BM_Site_Tag<3>/[0-9]+/8/1/0$'
-```
+| Dimension | Max level | Balls | Max stencil radius | Geometry | Leaves |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 1D | 16 | 16 | 1 | box | 958 |
+| 1D | 16 | 256 | 1 | box | 6,614 |
+| 1D | 16 | 256 | 3 | box | 6,618 |
+| 1D | 14 | 256 | 1 | hole | 3,138 |
+| 1D | 16 | 256 | 1 | periodic | 6,614 |
+| 2D | 10 | 1 | 1 | box | 25,594 |
+| 2D | 10 | 16 | 1 | box | 54,733 |
+| 2D | 12 | 16 | 1 | box | 235,309 |
+| 2D | 10 | 16 | 3 | box | 54,865 |
+| 2D | 8 | 16 | 1 | hole | 47,898 |
+| 2D | 10 | 16 | 1 | periodic | 54,733 |
+| 3D | 7 | 1 | 1 | box | 135,640 |
+| 3D | 7 | 8 | 1 | box | 197,884 |
+| 3D | 7 | 8 | 3 | box | 206,900 |
+| 3D | 5 | 8 | 1 | hole | 192,619 |
+| 3D | 7 | 8 | 1 | periodic | 197,884 |
 
-Each point reports the intervals of its input (`in_itv` for a synthetic set,
-`leaf_itv` for a mesh) and of its output (`itv`).
+`mr_config` (`mr_fixtures.hpp`) builds every mesh with min level 2, the default
+graduation width (1) and prediction stencil radius (1), and two settings that
+change the sets:
+
+- `max_stencil_radius(r)`: the widest stencil a scheme reads on the mesh, 1 for
+  an upwind scheme, 3 for a WENO5 scheme.
+- `disable_minimal_ghost_width()`: without it, the mesh raises the max stencil
+  radius to at least 2 (`mesh_config::parse_args`), so a radius of 1 could not
+  be measured.
+
+The ghost width is the larger of the max stencil radius and the prediction
+stencil radius, so 1 or 3 here. It sets the size of `cells_and_ghosts` and
+`reference`, which nearly every call site reads. The max stencil radius also
+decides the path of `make_graduation`: above 1, it extends the cells along the
+boundary of the domain. The fronts move by 4 cells of the finest level between
+two time steps, and the mesh is adapted with `epsilon = 1e-3` and a Dirichlet
+boundary condition.
+
+**Domain with a hole.** It is built as in
+`demos/FiniteVolume/linear_convection_obstacle.cpp`: the unit box, from which
+`DomainBuilder::remove` takes the box [0.5, 0.75)^dim. Its boundary has the
+faces of the hole, so the outer ghost and boundary condition sites handle more
+ghosts (2D: 530 boundary cells in `BM_Site_BcCells` against 90 on the box, 487
+projection ghosts against 74), and the library takes the branches of
+`project_bc` and `predict_bc` for a domain that is not a box: each call builds
+one more `LevelCellArray`, the outer layer in every direction. The hole has no
+convex corner, so the corners are those of the box. `DomainBuilder` gives this
+domain a scaling factor of 1/4, the largest length that divides its boxes: at
+max level L the mesh has the resolution of the unit box at L + 2, hence a max
+level 2 below the main mesh of its dimension.
+
+**Periodic meshes.** They have the cells of the main mesh of their dimension,
+since the fronts do not reach the boundary. What changes is the ghosts: the
+mesh construction adds the periodic copies of the cells and their prediction
+ghosts in 3^dim - 1 directions, `update_ghost_mr` copies the periodic ghosts
+(`BM_Site_PeriodicGhosts`), the interfaces include those across the boundary,
+and `make_graduation` takes its periodic path.
 
 ### Partitions
 
 The MPI usages of the set algebra run sequentially, on meshes split into
 subdomains. The generator cuts the cells of an adapted mesh along the Hilbert
-curve of the domain into P pieces of equal number of cells, as the SFC load
-balancer does with one atom per cell and a unit weight, and writes for each
-rank the mesh MPI builds from its piece: its subdomain, union, ghosts,
-reference and projection cells, the ranks its bounding box may touch, and its
-MPI neighbourhood. The library cannot build these meshes on one process, so
-the generator builds them with the sites themselves (static backend); they
-were checked once against the meshes the library builds with MPI, one rank
-per subdomain ([Coverage](#coverage)).
+curve of the domain into P pieces with the same number of cells, as the SFC
+load balancer does with one atom per cell and a unit weight. For each rank it
+writes the mesh MPI builds from its piece: subdomain, union, ghosts, reference
+and projection cells, the ranks its bounding box may touch, and its MPI
+neighbourhood. The library cannot build these meshes on one process, so the
+generator builds them with the sites themselves (static backend).
 
-A partition benchmark runs the site of every rank in turn, so its time is
-that of all the ranks, and takes the number of ranks as a fifth argument:
-`static/BM_Site_SubdomainExchange<2>/10/16/1/0/4` is the subdomain exchange
-of the 2D main mesh split into 4 subdomains. It reports `ranks` and
-`neighbours`, the neighbour pairs counted from each side.
-`bench::partition_cases` lists the partitions: the main mesh of each
-dimension in the box into 2, 4 and 16 subdomains, and periodic into 4.
+A partition benchmark runs the site of every rank in turn, so its time is that
+of all the ranks. It takes the number of ranks as a fifth argument:
+`static/BM_Site_SubdomainExchange<2>/10/16/1/0/4` is the subdomain exchange of
+the 2D main mesh split into 4 subdomains. It reports `ranks` and `neighbours`,
+the neighbour pairs counted from each side. `bench::partition_cases` lists the
+partitions: the main mesh of each dimension in the box into 2, 4 and 16
+subdomains, and periodic into 4.
 
-Every pair of ranks is neighbours on these partitions but the 1D and 2D
-ones into 16 (1D: 42 pairs of 120, 2D: 113, 3D: 120). The ghost reach
-`find_neighbourhood` expands a subdomain by is `2 R + 4 P + 4` cells of the
-coarsest level of the rank (`Mesh_base::ghost_physical_reach`), here 10 cells
-of level 2, which is more than twice the domain.
+Every pair of ranks is neighbours on these partitions except on the 1D and 2D
+ones into 16 (1D: 42 pairs of 120, 2D: 113, 3D: 120). `find_neighbourhood`
+expands a subdomain by a ghost reach of `2 R + 4 P + 4` cells of the coarsest
+level of the rank (`Mesh_base::ghost_physical_reach`), here 10 cells of level
+2, which is more than twice the domain.
+
+## Result verification
+
+Each benchmark of `bench_set_call_sites` and `bench_dynamic_set` checks, once
+and outside the timed loop, that its backend computes the same sets as the
+reference. A backend that computes other sets therefore cannot be timed as if
+it were right.
+
+The generator runs every site and mode once with the static algebra, on every
+mesh and partition, and writes a checksum per site and level next to the
+inputs, in `<mesh>_checksums.txt` (format in `site_checksum.hpp`). For each
+level, the checksum holds the number of sets the site passed, their intervals
+and cells, and a 64-bit FNV-1a hash of the intervals in traversal order:
+start, end and (y, z) of each interval, with a marker before each set. The
+checksum is computed from the traversal, with adjacent intervals of a row
+merged, so it does not depend on how a backend stores its sets or splits its
+rows. For a site that only asks whether sets are empty, the checksum holds the
+answers.
+
+When a checksum differs from the reference, the benchmark stops with
+`SkipWithError`, which prints the first level that differs:
+
+```text
+dynamic/BM_Mode_FlatOn<2>/8/16/1/1  ERROR OCCURRED: 'not the sets of the reference: level 2: 4 sets, 25 intervals, 34 cells, hash d04e89af60cd62a7, 4 sets, 28 intervals, 40 cells, hash de3a5288cbb20525 in the reference'
+```
+
+The other benchmarks still run, and the binary then exits with a failure,
+which a script can test. A missing checksum file or entry is an error too:
+regenerate the inputs.
+
+The reference is the static algebra of the library the generator was built
+with. The sites were checked against the library once ([Coverage](#coverage)),
+and a change to the library does not regenerate the reference, so the check
+also catches a change to the static algebra that alters a result.
+
+`bench_dynamic_set` leaves out the sites whose checksums differ with the
+dynamic algebra, so every benchmark it runs passes:
+
+| Sites | Meshes | Cause |
+| --- | --- | --- |
+| `BM_Site_MeshPredictionGhosts`, `BM_SiteCached_MeshPredictionGhosts`, `BM_Site_MeshSubMesh` (whole meshes and partitions) | all | `dyn::expand` of a set projection returns other cells than the static expansion, and takes 290 s per iteration in 3D against 1 to 2 ms |
+| `BM_Mode_Contract` | 3D | `dyn::contract` returns other cells than the static one |
+| `BM_Site_SubdomainExchange` | 3D partitions in the box | in `outer_subdomain_corner`, `difference(translate(domain, e_z), translate(domain, 0))`, whose two translations read the same node, comes out empty along z |
+| `BM_Mode_NestedOn`, `BM_Mode_FlatOn` | domain with a hole | `difference(domain2, translate(domain2, -direction))` reads the same node twice and misses cells at the min level |
+
+The last two rows share one cause: an expression that reads a node both as it
+is and translated. With one node per use, both give the reference sets. The
+`keep` function of `benchmark_dynamic_set.cpp` holds this list; remove an entry
+to see the mismatch.
+
+## Sweep over the level
+
+To draw the time against the number of intervals, configure with
+`-DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON`. The synthetic benchmarks
+(`bench_set_operators`, `bench_set_projection`, `bench_set_mesh_shape`) then
+run at a range of levels instead of one, and the generator writes one more mesh
+per max level, which the call sites read. `bench::sweep_cases` lists these
+meshes, all in the box with a max stencil radius of 1:
+
+| Dimension | Max levels | Balls |
+| --- | --- | ---: |
+| 1D | 12, 14, 16, 18, 20 | 256 |
+| 2D | 8 to 13 | 16 |
+| 3D | 5 to 9 | 8 |
+
+The option is off by default because the largest meshes of the sweep take most
+of the generation time and disk space. It has its own stamp in the inputs
+directory, so turning it on generates the meshes it adds.
+
+The level is the first argument of every benchmark, so a filter on the other
+arguments selects one curve. Each point reports the intervals of its input
+(`in_itv` for a synthetic set, `leaf_itv` for a mesh) and of its output
+(`itv`):
+
+```bash
+cmake -S . -B build -DSAMURAI_BENCHMARK_SET_ALGEBRA_SWEEP=ON
+ninja -C build bench_set_operators bench_dynamic_set
+./build/benchmark/bench_set_operators --benchmark_filter='BM_Self<2, Shape::shell>/'
+./build/benchmark/bench_dynamic_set --benchmark_filter='BM_Site_Tag<3>/[0-9]+/8/1/0$'
+```
+
+### Plotting
+
+`plot_set_algebra.py` draws the curves of a sweep from the JSON output of one
+or more runs. It needs matplotlib, which `samurai-mpi-env` has
+(`micromamba install matplotlib-base` adds it to another environment):
+
+```bash
+./build/benchmark/bench_dynamic_set --benchmark_filter='BM_Site_(Tag|Interfaces)<3>/[0-9]+/8/1/0$' \
+    --benchmark_out=sweep.json --benchmark_out_format=json
+python benchmark/plot_set_algebra.py sweep.json --out plots
+```
+
+It writes one figure per benchmark family (`plots/BM_Site_Tag_3.png` for
+`BM_Site_Tag<3>`): `t/itv` against `itv` on log scales, one curve per backend,
+and, when the run has two backends, the ratio of their times. The options:
+
+- `--x level`, `--x leaf_itv` or `--x in_itv` changes the horizontal axis. A
+  family whose `itv` does not change with the level is drawn against the level.
+- `--filter <regex>` selects families by name.
+- `--ratio NUM DEN` chooses the backends of the ratio.
+- `run.json:label` prefixes the backends of a file with `label/`, to compare
+  two runs of the same backend: `before.json:old after.json:new --ratio
+  new/static old/static`.
+- `--min-points 1` also draws the meshes outside the sweep, which are single
+  points; by default a curve needs two.
+
+The script uses the median aggregate of a run when it has one, and leaves out
+the benchmarks that stopped with an error.
 
 ## Coverage
 
-The library usages of the set algebra and the benchmark that measures them.
-Each site was checked once against the library on the meshes of
-`mesh_cases`, in 1D, 2D and 3D, on the three geometries: the level cell
-arrays it builds are equal to those of the mesh, the outer ghost and
-boundary condition sites hold exactly the ghosts the library writes
-(`project_corner_below` writes a subset of its sets: it skips a coarse ghost
-whose corner-most child is not in the mesh), the periodic ghosts are those
-`iterate_over_periodic_ghosts` visits at each level, and the interfaces have
-one cell per call of the callback of `for_each_interior_interface`. On a
-periodic axis, the outer ghost and boundary condition sites skip the
+The library usages of the set algebra and the benchmark that measures each.
+Each site was checked once against the library on the meshes of `mesh_cases`,
+in 1D, 2D and 3D, on the three geometries:
+
+- the level cell arrays a site builds equal those of the mesh;
+- the outer ghost and boundary condition sites hold exactly the ghosts the
+  library writes (`project_corner_below` writes a subset of its sets: it skips
+  a coarse ghost whose corner-most child is not in the mesh);
+- the periodic ghosts are those `iterate_over_periodic_ghosts` visits at each
+  level;
+- the interfaces have one cell per call of the callback of
+  `for_each_interior_interface`.
+
+On a periodic axis, the outer ghost and boundary condition sites skip the
 directions the library skips; the periodic meshes are periodic along every
 axis, so these sites have nothing to do there.
 
-The partitions were checked against the library built with MPI, run on 2, 4
-and 16 processes with one subdomain each: on every rank, the neighbourhood,
-the subdomain pyramid, the union, the cells and ghosts, the reference and
+The partitions were checked against the library built with MPI, on 2, 4 and 16
+processes with one subdomain each. On every rank, the neighbourhood, the
+subdomain pyramid, the union, the cells and ghosts, the reference and
 projection cells equal those of the mesh `MRMesh(cells, reference mesh)`
 builds; `outer_subdomain_corner` and the two interfaces of the exchange equal
-the library's for every neighbour and level; the interfaces have one cell
-per callback of `for_each_interior_interface`, and the periodic ghosts of the
-rank those `iterate_over_periodic_ghosts` visits. The sets of the periodic
-ghosts exchanged with the neighbours are not visible from outside the
-library and were not compared. `BM_Site_DiffusionPeel` was checked against a
-transcription of `give_to_neighbour` with the library types, since the
-library only runs it with the fluxes of an MPI run.
+the library's for every neighbour and level; the interfaces have one cell per
+callback of `for_each_interior_interface`, and the periodic ghosts of the rank
+are those `iterate_over_periodic_ghosts` visits. The sets of the periodic
+ghosts exchanged with the neighbours are not visible from outside the library
+and were not compared. `BM_Site_DiffusionPeel` was checked against a
+transcription of `give_to_neighbour` with the library types, since the library
+only runs it with the fluxes of an MPI run.
 
 | Library usage | Source | Benchmark |
 | --- | --- | --- |
@@ -196,14 +366,36 @@ library only runs it with the fluxes of an MPI run.
 | `iterate_over_periodic_ghosts` with the MPI neighbours | `algorithm/update_periodic.hpp:124-171` | `BM_Site_PeriodicGhosts` (periodic partitions) |
 | Diffusion load balancer, `give_to_neighbour`: the ring of owned coarse cells next to the front, a one-cell set per coarse cell of the ring, intersected with every level to weigh it and to cede it, then the new front and owned cells | `load_balancing/strategies/diffusion.hpp:383-529`, `696-735` | `BM_Site_DiffusionPeel` (partitions) |
 
-`BM_Site_OwnershipPerCell` finds the ghosts without an owner outside the
-timed loop: the library reads them from the owners it has set, which needs
-MPI and PETSc. `BM_Site_PerCellChildren` and `BM_Site_OwnershipPerCell` build
-the one-cell `LevelCellArray` with the builder of the backend, where the
-library appends the cell to a `LevelCellArray` it clears after use.
+Where a site departs from the library:
 
-The modes (`set_modes.hpp`) run on the same meshes. Each pair yields the
-same cells:
+- `BM_Site_OwnershipPerCell` finds the ghosts without an owner outside the
+  timed loop: the library reads them from the owners it has set, which needs
+  MPI and PETSc.
+- `BM_Site_PerCellChildren` and `BM_Site_OwnershipPerCell` build the one-cell
+  `LevelCellArray` with the builder of the backend, where the library appends
+  the cell to a `LevelCellArray` it clears after use.
+- `BM_Site_DiffusionPeel` makes every rank peel a tenth of its cells towards
+  each of its neighbours, each time from the partition as it is: the library
+  takes the load from the fluxes of a diffusion on the loads of all the ranks,
+  which the equal partitions make zero, and chains the peels of a rank. Each
+  cell weighs 1; the library reads the weight and the owner of each cell from
+  fields, which is not measured. Where the library builds a `CellArray` (the
+  one-cell set of each coarse cell, the ring, the projections), the site
+  builds a level cell array of the min level.
+- `BM_Site_SubdomainExchange` passes the outer corners it builds to `f`, where
+  the library reads them with `for_each_interval`, and fills the builder of
+  the backend where the library sorts an `ArrayOfIntervalAndPoint`.
+
+Not covered: the connectivity repair of the diffusion load balancer
+(`load_balancing/strategies/diffusion.hpp:546-688`), `make_graduation` with MPI
+neighbours, and the exchanges of whole meshes and subdomains, which are
+serializations, not set algebra. `MROMesh::update_sub_mesh_impl`
+(`mr/mesh_with_overleaves.hpp`) is not measured: its constructors call
+`Mesh_base` constructors that do not exist, so it does not compile, and only
+the legacy LBM demos, which are not built, use it.
+
+The modes (`set_modes.hpp`) run on the same meshes. Each pair yields the same
+cells:
 
 | Benchmark | Compared with | Question |
 | --- | --- | --- |
@@ -214,35 +406,6 @@ same cells:
 | `BM_Mode_OnMixedLevels` (an operand at the finest level) | `BM_Mode_OnSameLevel` | `.on(level)` that refines an operand and coarsens it back |
 | `BM_Mode_NestedOn` (`bc/apply_field_bc.hpp:389-392`) | `BM_Mode_FlatOn` | A chain of `.on(level)` at the level of the operands |
 | `BM_Mode_IntersectionSelfOn` (`amr/mesh.hpp:258`) | `BM_Mode_SelfOn` | `intersection(X, X).on(l - 1)` against `self(X).on(l - 1)` |
-
-`BM_Site_DiffusionPeel` makes every rank peel towards each of its
-neighbours a tenth of its cells, each time from the partition as it is: the
-library takes the load from the fluxes of a diffusion on the loads of all
-the ranks, which the equal partitions make zero, and chains the peels of a
-rank. Each cell weighs 1, and the library reads the weight and the owner of
-each cell from fields, which is not measured. Where the library builds a
-`CellArray` (the one-cell set of each coarse cell, the ring, the
-projections), the site builds a level cell array of the min level.
-`BM_Site_SubdomainExchange` passes the outer corners it builds to `f`, where
-the library reads them with `for_each_interval`, and fills the builder of
-the backend where the library sorts an `ArrayOfIntervalAndPoint`.
-
-Not covered yet: the connectivity repair of the diffusion load balancer
-(`load_balancing/strategies/diffusion.hpp:546-688`), `make_graduation` with
-MPI neighbours, and the exchanges of whole meshes and subdomains, which are
-serializations, not set algebra. `MROMesh::update_sub_mesh_impl`
-(`mr/mesh_with_overleaves.hpp`) is not measured: its constructors call
-`Mesh_base` constructors that no longer exist, so it does not compile, and
-only the legacy LBM demos, which are not built, use it.
-
-`bench_dynamic_set` leaves out the sites the dynamic algebra gets wrong:
-`MeshPredictionGhosts` and `MeshSubMesh` (`dyn::expand` of a set
-projection), `BM_Mode_Contract` (`dyn::contract` returns other cells in
-3D), and `SubdomainExchange` in 3D: in `outer_subdomain_corner`,
-`difference(translate(domain, e_z), translate(domain, 0))`, whose two
-translations read the same node, is empty with the dynamic algebra, where it
-is the boundary layer of the domain; with one node per translation it is
-right.
 
 ## Adding a backend
 
@@ -260,11 +423,11 @@ compare a new set algebra with samurai's:
    or masked axes), `on`, `traverse`, `empty`, `materialize` and
    `builder<dim>(level)`. An operation the prototype lacks can wrap samurai's,
    as `SamuraiDynamic` does for the expansion per axis. Add
-   `static_assert(bench::SetAlgebraBackend<MyBackend>);` after it, and keep
-   its header free of the mesh stack.
-2. The sites read their operands from `SiteInputs`: samurai
-   `LevelCellArray`s read from the input files. A backend whose `lca_t<dim>`
-   is `samurai::LevelCellArray<dim>` reads them as they are. Any other backend
+   `static_assert(bench::SetAlgebraBackend<MyBackend>);` after it, and keep its
+   header free of the mesh stack.
+2. The sites read their operands from `SiteInputs`, samurai `LevelCellArray`s
+   read from the input files. A backend whose `lca_t<dim>` is
+   `samurai::LevelCellArray<dim>` reads them as they are. Any other backend
    gets a copy in its own `lca_t`, made once outside the timed loop with its
    builder: `add_interval(interval, index)` for each interval, then `build()`.
    An operand is either an `lca_t` or a set expression of the backend;
@@ -273,90 +436,15 @@ compare a new set algebra with samurai's:
    `register_backend<MyBackend>()`, next to `SamuraiStatic`, and include its
    header there (add a `target_include_directories` in `CMakeLists.txt` if it
    lives outside the repository). Its benchmarks are named
-   `<name>/BM_Site_X<dim>/<args>`, so `--benchmark_filter='^<name>/'` runs
-   only them. Compare their medians with those of `static/` from the same run.
-
-Each site passes every set it evaluates to `f(level, set)`, and
-`bench::run_site` traverses it with `B::traverse`. To check a result,
-traverse the set or `materialize` it.
-
-## Meshes
-
-The benchmarks on adapted meshes take four arguments, `max_level`, the number
-of balls, the max stencil radius and the geometry (`bench::Geometry`: 0 for
-the unit box, 1 for the unit box with a hole, 2 for the unit box periodic
-along every axis):
-`static/BM_Site_Tag<3>/7/8/1/0` runs the static backend on the 3D mesh of
-max level 7 refined around 8 balls in the unit box, with a max stencil radius
-of 1. `bench::mesh_cases` (`site_inputs.hpp`) lists the meshes:
-
-| Dimension | Max level | Balls | Max stencil radius | Geometry | Leaves |
-| --- | ---: | ---: | ---: | --- | ---: |
-| 1D | 16 | 16 | 1 | box | 958 |
-| 1D | 16 | 256 | 1 | box | 6,614 |
-| 1D | 16 | 256 | 3 | box | 6,618 |
-| 1D | 14 | 256 | 1 | hole | 3,138 |
-| 1D | 16 | 256 | 1 | periodic | 6,614 |
-| 2D | 10 | 1 | 1 | box | 25,594 |
-| 2D | 10 | 16 | 1 | box | 54,733 |
-| 2D | 12 | 16 | 1 | box | 235,309 |
-| 2D | 10 | 16 | 3 | box | 54,865 |
-| 2D | 8 | 16 | 1 | hole | 47,898 |
-| 2D | 10 | 16 | 1 | periodic | 54,733 |
-| 3D | 7 | 1 | 1 | box | 135,640 |
-| 3D | 7 | 8 | 1 | box | 197,884 |
-| 3D | 7 | 8 | 3 | box | 206,900 |
-| 3D | 5 | 8 | 1 | hole | 192,619 |
-| 3D | 7 | 8 | 1 | periodic | 197,884 |
-
-The domain with a hole is built as in
-`demos/FiniteVolume/linear_convection_obstacle.cpp`: the unit box, from which
-`DomainBuilder::remove` takes the box [0.5, 0.75)^dim. Its boundary has the
-faces of the hole, so the outer ghost and boundary condition sites handle
-more ghosts (2D: 530 boundary cells in `BM_Site_BcCells` against 90 on the
-box, 487 projection ghosts against 74), and the library takes the branches
-of `project_bc` and `predict_bc` for a domain that is not a box: each call
-builds one more `LevelCellArray`, the outer layer in every direction. The
-hole has no convex corner, so the corners are those of the box. DomainBuilder
-gives this domain a scaling factor of 1/4, the largest length that divides
-its boxes: at max level L the mesh has the resolution of the unit box at
-L + 2, hence its max level of 2 below the main mesh of its dimension.
-
-The periodic meshes have the cells of the main mesh of their dimension: the
-fronts do not reach the boundary. What changes is the ghosts. The mesh
-construction adds the periodic copies of the cells and their prediction
-ghosts, in 3^dim - 1 directions (`BM_Site_MeshSubMesh<3>`: 12.5 ms against
-5.3 ms on the box), `update_ghost_mr` copies the periodic ghosts
-(`BM_Site_PeriodicGhosts`), the interfaces include those across the
-boundary, and `make_graduation` takes its periodic path
-(`BM_Graduation<3>`: 7.3 ms against 0.47 ms).
-
-With the sweep, `bench::sweep_cases` adds one mesh per max level, with a
-max stencil radius of 1 and the balls of the main mesh of each dimension:
-
-| Dimension | Max levels | Balls |
-| --- | --- | ---: |
-| 1D | 12, 14, 16, 18, 20 | 256 |
-| 2D | 8 to 13 | 16 |
-| 3D | 5 to 9 | 8 |
-
-`mr_config` (`mr_fixtures.hpp`) builds every mesh with min level 2, the default
-graduation width (1) and prediction stencil radius (1), and two settings that
-change the sets:
-
-- `max_stencil_radius(r)`: the widest stencil a scheme reads on the mesh, 1
-  for an upwind scheme, 3 for a WENO5 scheme.
-- `disable_minimal_ghost_width()`: without it, the mesh raises the max stencil
-  radius to at least 2 (`mesh_config::parse_args`), so a radius of 1 could not
-  be measured.
-
-The ghost width is the larger of the max stencil radius and the prediction
-stencil radius, so it is 1 or 3 here. It sets the size of `cells_and_ghosts`
-and `reference`, which nearly every call site reads, and the max stencil radius
-also decides the path of `make_graduation`: above 1, it extends the cells along
-the boundary of the domain. The fronts are moved by 4 cells of the finest
-level between two time steps, and adapted with `epsilon = 1e-3` and a
-Dirichlet boundary condition.
+   `<name>/BM_Site_X<dim>/<args>`, so `--benchmark_filter='^<name>/'` runs only
+   them.
+4. Run the binary once with `--benchmark_min_time=1x`: it checks every site
+   against the reference in a few seconds and exits with a failure if one
+   differs ([Result verification](#result-verification)). `traverse` must emit
+   the intervals in samurai's order (rows by increasing z, then y; intervals
+   by increasing x), or the hash differs.
+5. Compare the medians of its benchmarks with those of `static/` from the same
+   run, for example with `plot_set_algebra.py --ratio <name> static`.
 
 ## Baseline
 
@@ -466,7 +554,8 @@ version is 5 to 21 times slower than the static one (3D ghost projection:
 873 µs against 68 µs; 3D interfaces: 8.09 ms against 436 µs; 3D corners:
 86.5 ms against 4.10 ms). Its expansion (`dyn::expand`) returns other cells
 than the static one and takes 290 s per iteration on the 3D prediction ghosts
-of the mesh construction, so `bench_dynamic_set` leaves those two sites out.
+of the mesh construction, so `bench_dynamic_set` leaves those sites out
+([Result verification](#result-verification)).
 
 ### Sweep, geometries and partitions
 
