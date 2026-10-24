@@ -218,11 +218,7 @@ namespace bench
 
         for (std::size_t level = (min_level > 0) ? min_level - 1 : 0; level < max_level; ++level)
         {
-            auto ghosts_below_cells = samurai::intersection(
-                                          mesh[mesh_id_t::all_cells][level],
-                                          samurai::union_(mesh[mesh_id_t::cells][level + 1], mesh[mesh_id_t::cells][level + 2]))
-                                          .on(level);
-            ghosts_below_cells.apply_op(samurai::compute_detail(detail, u));
+            samurai::ghosts_below_cells(mesh, level).apply_op(samurai::compute_detail(detail, u));
         }
 
         for (std::size_t level = std::max<std::size_t>(min_level, 1); level <= max_level; ++level)
