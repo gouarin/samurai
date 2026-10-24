@@ -187,96 +187,11 @@ namespace bench
         return in;
     }
 
-    // The sets update_cell_array_from_tag (algorithm/graduation.hpp) builds
-    // from the tags of `cells` before its set expression: a copy of its loop
-    // over the cells, which fills them cell by cell.
-    template <std::size_t dim, class Tag>
-    void tag_sets(SiteInputs<dim>& in, const typename mr_mesh_t<dim>::ca_type& old_ca, const Tag& tag)
-    {
-        using ca_type          = typename mr_mesh_t<dim>::ca_type;
-        using interval_t       = typename ca_type::interval_t;
-        using value_t          = typename interval_t::value_t;
-        using size_type        = unsigned int;
-        using unsigned_value_t = std::make_unsigned_t<value_t>;
-        using coord_type       = typename ca_type::lca_type::coord_type;
-
-        const auto& mesh = tag.mesh();
-
-        ca_type ca_add_m;
-        ca_type ca_remove_m;
-        ca_type ca_add_p;
-        ca_type ca_remove_p;
-
-        std::vector<interval_t> add_p_interval;
-        std::vector<coord_type> add_p_inner_stencil;
-        std::vector<std::size_t> add_p_idx;
-
-        for (std::size_t level = old_ca.min_level(); level < old_ca.max_level() + 1; ++level)
-        {
-            const auto begin = old_ca[level].cbegin();
-            const auto end   = old_ca[level].cend();
-            for (auto it = begin; it != end; ++it)
-            {
-                const auto& x_interval = *it;
-                const auto& yz         = it.index();
-                const bool is_yz_even  = dim == 1 or xt::all(xt::equal(yz % 2, 0));
-
-                for (value_t x = x_interval.start; x < x_interval.end; ++x)
-                {
-                    const size_type itag         = static_cast<size_type>(x_interval.index) + static_cast<unsigned_value_t>(x);
-                    const bool refine            = tag[itag] & static_cast<std::uint8_t>(samurai::CellFlag::refine);
-                    const bool coarsenAndNotKeep = tag[itag] & static_cast<std::uint8_t>(samurai::CellFlag::coarsen)
-                                               and not(tag[itag] & static_cast<std::uint8_t>(samurai::CellFlag::keep));
-                    if (refine and level < mesh.max_level())
-                    {
-                        ca_remove_p[level].add_point_back(x, yz);
-                        if constexpr (dim == 1)
-                        {
-                            ca_add_p[level + 1].add_interval_back({2 * x, 2 * x + 2}, {});
-                        }
-                        else
-                        {
-                            samurai::nestedLoop<dim - 1, 0, dim - 2>(0,
-                                                                     2,
-                                                                     [&](const auto& inner_stencil)
-                                                                     {
-                                                                         add_p_interval.push_back({2 * x, 2 * x + 2});
-                                                                         if constexpr (dim > 2)
-                                                                         {
-                                                                             add_p_inner_stencil.emplace_back(2 * yz + inner_stencil);
-                                                                             add_p_idx.push_back(add_p_interval.size() - 1);
-                                                                         }
-                                                                     });
-                        }
-                    }
-                    else if (coarsenAndNotKeep and level > mesh.min_level())
-                    {
-                        if (x % 2 == 0 and is_yz_even)
-                        {
-                            ca_add_m[level - 1].add_point_back(x >> 1, yz >> 1);
-                        }
-                        ca_remove_m[level].add_point_back(x, yz);
-                    }
-                }
-                if (dim != 1 and (it + 1 == end or (it + 1).index()[dim - 2] != yz[dim - 2]))
-                {
-                    samurai::add_list_of_interval_back(add_p_interval, coord_type(2 * yz), add_p_inner_stencil, add_p_idx, ca_add_p[level + 1]);
-                    add_p_interval.clear();
-                    add_p_inner_stencil.clear();
-                    add_p_idx.clear();
-                }
-            }
-        }
-        in.tag_add_m    = ca_add_m;
-        in.tag_remove_m = ca_remove_m;
-        in.tag_add_p    = ca_add_p;
-        in.tag_remove_p = ca_remove_p;
-    }
-
     // What Adapt::harten (mr/adapt.hpp) passes to make_graduation at the first
     // iteration of the adaptation of `adapted` to the fronts shifted by
     // `shift`: update_cell_array_from_tag(cells, tag), before graduation, in
-    // in.ungraded_cells, and the sets it builds from the tags (tag_sets). A
+    // in.ungraded_cells, and the cells it adds and removes
+    // (cells_changed_by_tag, algorithm/graduation.hpp). A
     // copy of harten up to that call, for the configuration of AdaptedCase:
     // sequential, no relative detail, boundary not kept refined.
     template <std::size_t dim>
@@ -327,7 +242,11 @@ namespace bench
         }
 
         in.ungraded_cells = samurai::update_cell_array_from_tag(mesh[mesh_id_t::cells], tag);
-        tag_sets(in, mesh[mesh_id_t::cells], tag);
+        auto changes      = samurai::cells_changed_by_tag(mesh[mesh_id_t::cells], tag);
+        in.tag_add_m      = std::move(changes.add_m);
+        in.tag_remove_m   = std::move(changes.remove_m);
+        in.tag_add_p      = std::move(changes.add_p);
+        in.tag_remove_p   = std::move(changes.remove_p);
     }
 
     //////////////////////////////////////////////////////////////////////

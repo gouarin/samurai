@@ -344,7 +344,7 @@ only runs it with the fluxes of an MPI run.
 | `build_pyramid` of the domain | `mesh.hpp:1250` | `BM_Site_BuildPyramid` |
 | `construct_corners` | `mesh.hpp:937` | `BM_Site_Corners` |
 | `amr::Mesh::update_sub_mesh_impl` | `amr/mesh.hpp:197` | `BM_Site_AmrSubMesh` |
-| `update_cell_array_from_tag`, its set expression | `algorithm/graduation.hpp:844-850` | `BM_Site_CellArrayFromTag` |
+| `update_cell_array_from_tag`, its set expression | `algorithm/graduation.hpp:866-872` | `BM_Site_CellArrayFromTag` |
 | `make_graduation`, periodic or not | `algorithm/graduation.hpp` | `BM_Graduation` |
 | `update_ghost_mr`: projection and prediction of the ghosts | `algorithm/update_ghost_mr.hpp` | `BM_Site_GhostProjection`, `BM_Site_GhostPrediction` |
 | `update_ghost_periodic` in `update_ghost_mr` (`iterate_over_periodic_ghosts`: four boxes per periodic axis and the two sets of the copied ghosts), and `update_tag_periodic`, which evaluates the same sets | `algorithm/update_periodic.hpp:34-180`, `210-416` | `BM_Site_PeriodicGhosts` |

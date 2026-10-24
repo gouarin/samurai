@@ -986,7 +986,7 @@ namespace bench::sites
         }
     }
 
-    // update_cell_array_from_tag (algorithm/graduation.hpp:844-850), at every
+    // update_cell_array_from_tag (algorithm/graduation.hpp:866-872), at every
     // iteration of an adaptation: the new cells from the old ones and the
     // sets the tags gave (SiteInputs::tag_*). The library appends the
     // intervals to the new CellArray (add_interval_back), which is what

@@ -338,10 +338,11 @@ namespace bench
         // have moved by one step. Not graded.
         ca_t ungraded_cells;
         // The four sets update_cell_array_from_tag (algorithm/graduation.hpp)
-        // fills from the tags before it computes ungraded_cells, named after
-        // its locals: the parents of the coarsened cells (ca_add_m), the
-        // coarsened cells (ca_remove_m), the children of the refined cells
-        // (ca_add_p) and the refined cells (ca_remove_p).
+        // builds from the tags before it computes ungraded_cells, the members
+        // of the samurai::TagChanges that cells_changed_by_tag returns: the
+        // parents of the coarsened cells (add_m), the coarsened cells
+        // (remove_m), the children of the refined cells (add_p) and the
+        // refined cells (remove_p).
         ca_t tag_add_m;
         ca_t tag_remove_m;
         ca_t tag_add_p;
