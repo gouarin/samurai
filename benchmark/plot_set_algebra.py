@@ -66,6 +66,41 @@ def describe_args(family, args):
     return "/".join(["L", *(str(a) for a in args)]) if args else ""
 
 
+def split_spec(spec):
+    """Split `path:label` into (path, label); a plain path gets the label ''."""
+    if ":" in spec and not Path(spec).exists():
+        path, _, label = spec.rpartition(":")
+        return path, label
+    return spec, ""
+
+
+def read_runs(path):
+    """Return the repetitions and the median aggregates of the runs of a file.
+
+    Both are keyed by run name. Runs without the `t/itv` counter are left
+    out, and so are failed runs, with a message.
+    """
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    runs = defaultdict(list)
+    medians = {}
+    for b in data["benchmarks"]:
+        if b.get("error_occurred"):
+            print(f"{path}: {b['name']}: {b.get('error_message', 'error')}, left out", file=sys.stderr)
+        elif "t/itv" not in b:
+            continue
+        elif b.get("run_type") != "aggregate":
+            runs[b.get("run_name", b["name"])].append(b)
+        elif b.get("aggregate_name") == "median":
+            medians[b.get("run_name", b["name"])] = b
+    return runs, medians
+
+
+def average(records):
+    """Average the numeric fields of the repetitions of a run."""
+    return {key: sum(r[key] for r in records) / len(records) for key in records[0] if isinstance(records[0][key], (int, float))}
+
+
 def load(paths):
     """Points by (family, rest of the args, backend): {level: record}.
 
@@ -75,25 +110,8 @@ def load(paths):
     """
     points = defaultdict(dict)
     for spec in paths:
-        path, label = spec, ""
-        if ":" in spec and not Path(spec).exists():
-            path, _, label = spec.rpartition(":")
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        runs = defaultdict(list)
-        medians = {}
-        for b in data["benchmarks"]:
-            if b.get("error_occurred"):
-                print(f"{path}: {b['name']}: {b.get('error_message', 'error')}, left out", file=sys.stderr)
-                continue
-            if "t/itv" not in b:
-                continue
-            run_name = b.get("run_name", b["name"])
-            if b.get("run_type") == "aggregate":
-                if b.get("aggregate_name") == "median":
-                    medians[run_name] = b
-            else:
-                runs[run_name].append(b)
+        path, label = split_spec(spec)
+        runs, medians = read_runs(path)
         for run_name, records in runs.items():
             parsed = parse_name(run_name)
             if parsed is None or not parsed[2]:
@@ -101,10 +119,7 @@ def load(paths):
             backend, family, args = parsed
             if label:
                 backend = f"{label}/{backend}" if backend else label
-            if run_name in medians:
-                record = medians[run_name]
-            else:
-                record = {key: sum(r[key] for r in records) / len(records) for key in records[0] if isinstance(records[0][key], (int, float))}
+            record = medians[run_name] if run_name in medians else average(records)
             points[(family, args[1:], backend)][args[0]] = record
     return points
 
@@ -155,73 +170,78 @@ def integer_or_log_x(ax, x):
         ax.set_xscale("log")
 
 
+def curve_style(k):
+    """Return the line style, marker and widths of the k-th set of arguments."""
+    return {"linestyle": LINESTYLES[k % len(LINESTYLES)], "marker": MARKERS[k % len(MARKERS)], "markersize": 5, "linewidth": 2}
+
+
+def finish_axes(ax, x, ylabel, title):
+    """Set the x scale, the labels, the title and the grid of a panel."""
+    integer_or_log_x(ax, x)
+    ax.set_xlabel(X_LABELS.get(x, x))
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, which="major", color="#d0d0d0", linewidth=0.6)
+    ax.grid(True, which="minor", color="#ececec", linewidth=0.4)
+
+
+def ratio_backends(args, backends):
+    """Return the (numerator, denominator) backends of the ratio, or None.
+
+    --ratio when given, otherwise the second backend over the first when the
+    family has exactly two.
+    """
+    if args.ratio:
+        return args.ratio
+    return (backends[1], backends[0]) if len(backends) == 2 else None
+
+
+def plot_times(ax, family, curves, colors, x, order):
+    """Draw the time per interval of every curve; return the lines."""
+    rests, backends = order
+    handles = []
+    for (rest, backend), curve in sorted(curves.items(), key=lambda item: (rests.index(item[0][0]), backends.index(item[0][1]))):
+        _, xs = x_values(curve, x)
+        ys = [curve[level]["t/itv"] * 1e9 for level in sorted(curve)]
+        label = " ".join(part for part in (backend, describe_args(family, rest)) if part)
+        (line,) = ax.plot(xs, ys, color=colors[backend], label=label, **curve_style(rests.index(rest)))
+        handles.append(line)
+    ax.set_yscale("log")
+    finish_axes(ax, x, "time per emitted interval (ns)", "time per interval")
+    plain_log_ticks(ax.yaxis)
+    return handles
+
+
+def plot_ratios(rax, family, curves, ratio, pairs, x, rests):
+    """Draw the ratio of the times of the two backends of `ratio`, per set of arguments."""
+    for rest in pairs:
+        num, den = curves[(rest, ratio[0])], curves[(rest, ratio[1])]
+        levels = sorted(set(num) & set(den))
+        _, xs = x_values({level: den[level] for level in levels}, x)
+        ys = [num[level]["t/itv"] / den[level]["t/itv"] for level in levels]
+        rax.plot(xs, ys, color="#3a3a38", label=describe_args(family, rest) or None, **curve_style(rests.index(rest)))
+    rax.axhline(1.0, color="#8a8a86", linewidth=1)
+    rax.set_ylim(bottom=0)
+    finish_axes(rax, x, f"{ratio[0]} / {ratio[1]}", f"time ratio {ratio[0]} / {ratio[1]}")
+    if len(pairs) > 1:
+        rax.legend(fontsize="small", frameon=False)
+
+
 def plot_family(plt, family, curves, colors, args):
-    """curves: {(rest of the args, backend): {level: record}}."""
+    """Draw the figure of a family; curves: {(rest of the args, backend): {level: record}}."""
     x = family_x(curves, args.x)
     backends = sorted({backend for _, backend in curves}, key=list(colors).index)
     rests = sorted({rest for rest, _ in curves})
-    ratio = args.ratio if args.ratio else (backends[1], backends[0]) if len(backends) == 2 else None
+    ratio = ratio_backends(args, backends)
     pairs = []
     if ratio:
         pairs = [rest for rest in rests if (rest, ratio[0]) in curves and (rest, ratio[1]) in curves]
 
     ncols = 2 if pairs else 1
     fig, axes = plt.subplots(1, ncols, figsize=(6.4 * ncols, 4.8), squeeze=False, layout="constrained")
-    ax = axes[0][0]
-    handles = []
-    for (rest, backend), curve in sorted(curves.items(), key=lambda item: (rests.index(item[0][0]), backends.index(item[0][1]))):
-        k = rests.index(rest)
-        _, xs = x_values(curve, x)
-        ys = [curve[level]["t/itv"] * 1e9 for level in sorted(curve)]
-        label = " ".join(part for part in (backend, describe_args(family, rest)) if part)
-        (line,) = ax.plot(
-            xs,
-            ys,
-            color=colors[backend],
-            linestyle=LINESTYLES[k % len(LINESTYLES)],
-            marker=MARKERS[k % len(MARKERS)],
-            markersize=5,
-            linewidth=2,
-            label=label,
-        )
-        handles.append(line)
-    ax.set_yscale("log")
-    integer_or_log_x(ax, x)
-    plain_log_ticks(ax.yaxis)
-    ax.set_xlabel(X_LABELS.get(x, x))
-    ax.set_ylabel("time per emitted interval (ns)")
-    ax.set_title("time per interval")
-    ax.grid(True, which="major", color="#d0d0d0", linewidth=0.6)
-    ax.grid(True, which="minor", color="#ececec", linewidth=0.4)
-
+    handles = plot_times(axes[0][0], family, curves, colors, x, (rests, backends))
     if pairs:
-        rax = axes[0][1]
-        for rest in pairs:
-            k = rests.index(rest)
-            num, den = curves[(rest, ratio[0])], curves[(rest, ratio[1])]
-            levels = sorted(set(num) & set(den))
-            _, xs = x_values({level: den[level] for level in levels}, x)
-            ys = [num[level]["t/itv"] / den[level]["t/itv"] for level in levels]
-            rax.plot(
-                xs,
-                ys,
-                color="#3a3a38",
-                linestyle=LINESTYLES[k % len(LINESTYLES)],
-                marker=MARKERS[k % len(MARKERS)],
-                markersize=5,
-                linewidth=2,
-                label=describe_args(family, rest) or None,
-            )
-        rax.axhline(1.0, color="#8a8a86", linewidth=1)
-        integer_or_log_x(rax, x)
-        rax.set_ylim(bottom=0)
-        rax.set_xlabel(X_LABELS.get(x, x))
-        rax.set_ylabel(f"{ratio[0]} / {ratio[1]}")
-        rax.set_title(f"time ratio {ratio[0]} / {ratio[1]}")
-        rax.grid(True, which="major", color="#d0d0d0", linewidth=0.6)
-        rax.grid(True, which="minor", color="#ececec", linewidth=0.4)
-        if len(pairs) > 1:
-            rax.legend(fontsize="small", frameon=False)
+        plot_ratios(axes[0][1], family, curves, ratio, pairs, x, rests)
 
     fig.suptitle(family, fontsize="large")
     fig.legend(handles=handles, loc="outside lower center", ncols=min(len(handles), 2 * ncols), frameon=False, fontsize="small")
