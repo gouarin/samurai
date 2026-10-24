@@ -568,24 +568,24 @@ namespace bench::sites
                     f(level, A::intersection(c, shifted));
                 };
                 const auto& own = cells[level];
-                same_level(own, A::translate(own, -direction));
-                if (in.periodic[d])
+                // across the periodic boundary, with the cells `other`
+                const auto periodic_same_level = [&](const auto& other)
                 {
-                    const auto shift = periodic_shift(in, level, d);
-                    same_level(own, A::translate(A::translate(own, shift), -direction));
-                    same_level(A::translate(own, -shift), A::translate(own, -direction));
-                }
-                for (const auto* neighbour : neighbours)
-                {
-                    const auto& other = neighbour->cells[level];
-                    same_level(own, A::translate(other, -direction));
-                    same_level(other, A::translate(own, -direction));
                     if (in.periodic[d])
                     {
                         const auto shift = periodic_shift(in, level, d);
                         same_level(own, A::translate(A::translate(other, shift), -direction));
                         same_level(A::translate(other, -shift), A::translate(own, -direction));
                     }
+                };
+                same_level(own, A::translate(own, -direction));
+                periodic_same_level(own);
+                for (const auto* neighbour : neighbours)
+                {
+                    const auto& other = neighbour->cells[level];
+                    same_level(own, A::translate(other, -direction));
+                    same_level(other, A::translate(own, -direction));
+                    periodic_same_level(other);
                 }
                 if (level >= cells.max_level())
                 {
@@ -600,25 +600,25 @@ namespace bench::sites
                     {
                         f(level + 1, A::on(A::intersection(coarse_cells, A::translate(fine_cells, sign * direction)), level + 1));
                     };
-                    jump(own, fine);
-                    if (in.periodic[d])
+                    // across the periodic boundary, with the fine cells
+                    // `other_fine` and the coarse cells `other_coarse`
+                    const auto periodic_jumps = [&](const auto& other_fine, const auto& other_coarse)
                     {
-                        const auto fine_shift   = periodic_shift(in, level + 1, d);
-                        const auto coarse_shift = periodic_shift(in, level, d);
-                        jump(own, A::translate(fine, -sign * fine_shift));
-                        jump(A::translate(own, sign * coarse_shift), fine);
-                    }
-                    for (const auto* neighbour : neighbours)
-                    {
-                        jump(own, neighbour->cells[level + 1]);
-                        jump(neighbour->cells[level], fine);
                         if (in.periodic[d])
                         {
                             const auto fine_shift   = periodic_shift(in, level + 1, d);
                             const auto coarse_shift = periodic_shift(in, level, d);
-                            jump(own, A::translate(neighbour->cells[level + 1], -sign * fine_shift));
-                            jump(A::translate(neighbour->cells[level], sign * coarse_shift), fine);
+                            jump(own, A::translate(other_fine, -sign * fine_shift));
+                            jump(A::translate(other_coarse, sign * coarse_shift), fine);
                         }
+                    };
+                    jump(own, fine);
+                    periodic_jumps(fine, own);
+                    for (const auto* neighbour : neighbours)
+                    {
+                        jump(own, neighbour->cells[level + 1]);
+                        jump(neighbour->cells[level], fine);
+                        periodic_jumps(neighbour->cells[level + 1], neighbour->cells[level]);
                     }
                 }
             }
