@@ -57,7 +57,7 @@ def parse_name(name):
 
 
 def describe_args(family, args):
-    """The arguments other than the level, in words where they are known."""
+    """Describe the arguments other than the level, in words where they are known."""
     if family.startswith(("BM_Site", "BM_Mode")) and len(args) in (3, 4):
         words = [f"{args[0]} balls", f"radius {args[1]}", GEOMETRIES.get(args[2], f"geometry {args[2]}")]
         if len(args) == 4:
@@ -110,6 +110,7 @@ def load(paths):
 
 
 def x_values(curve, x):
+    """Return the sorted levels of a curve and the value of `x` at each of them."""
     levels = sorted(curve)
     if x == "level":
         return levels, [float(level) for level in levels]
@@ -228,6 +229,7 @@ def plot_family(plt, family, curves, colors, args):
 
 
 def main():
+    """Parse the command line, then draw one figure per family of benchmarks."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("runs", nargs="+", help="JSON outputs of the benchmarks, as path or path:label")
     parser.add_argument("--out", default="set_algebra_plots", help="directory of the figures (default: %(default)s)")
