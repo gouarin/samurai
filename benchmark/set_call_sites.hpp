@@ -1535,6 +1535,22 @@ namespace bench::sites
         return builder.build();
     }
 
+    // g(one_cell(level, x, index)) for every cell (x, index) of the set at
+    // `level`, in order.
+    template <class B, std::size_t dim, class Set, class G>
+    void for_each_one_cell(const Set& set, std::size_t level, G&& g)
+    {
+        Algebra<B>::traverse(set,
+                             [&](const auto& i, const auto& index)
+                             {
+                                 const auto yz = to_index<dim>(index);
+                                 for (auto ii = i.start; ii < i.end; ++ii)
+                                 {
+                                     g(one_cell<B, dim>(level, ii, yz));
+                                 }
+                             });
+    }
+
     // project_bc(proj_level, direction, layer, field) and project_bc(subset,
     // ...) (algorithm/update_outer_ghost.hpp:22-153), with one layer of
     // boundary ghosts: for every projection ghost, the set of its children
@@ -1563,22 +1579,18 @@ namespace bench::sites
                         direction,
                         [&](std::size_t, const auto& projection_ghosts)
                         {
-                            A::traverse(
+                            for_each_one_cell<B, dim>(
                                 projection_ghosts,
-                                [&](const auto& i, const auto& index)
+                                proj_level,
+                                [&](const auto& proj_ghost_lca)
                                 {
-                                    const auto yz = to_index<dim>(index);
-                                    for (auto ii = i.start; ii < i.end; ++ii)
+                                    for (auto children_level = proj_level + 1; children_level <= proj_level + 2; ++children_level)
                                     {
-                                        const auto proj_ghost_lca = one_cell<B, dim>(proj_level, ii, yz);
-                                        for (auto children_level = proj_level + 1; children_level <= proj_level + 2; ++children_level)
+                                        if (f(children_level,
+                                              A::intersection(A::on(proj_ghost_lca, children_level), in.reference[children_level]))
+                                            > 0)
                                         {
-                                            if (f(children_level,
-                                                  A::intersection(A::on(proj_ghost_lca, children_level), in.reference[children_level]))
-                                                > 0)
-                                            {
-                                                break;
-                                            }
+                                            break;
                                         }
                                     }
                                 });
@@ -1659,16 +1671,12 @@ namespace bench::sites
         for (std::size_t level = max - 1; level >= min; --level)
         {
             f(level, A::on(A::intersection(reference[level], reference[level + 1]), level));
-            A::traverse(ghosts.projection[level],
-                        [&](const auto& i, const auto& index)
-                        {
-                            const auto yz = to_index<dim>(index);
-                            for (auto ii = i.start; ii < i.end; ++ii)
-                            {
-                                const auto proj_ghost_lca = one_cell<B, dim>(level, ii, yz);
-                                f(level + 1, A::intersection(A::on(proj_ghost_lca, level + 1), reference[level + 1]));
-                            }
-                        });
+            for_each_one_cell<B, dim>(ghosts.projection[level],
+                                      level,
+                                      [&](const auto& proj_ghost_lca)
+                                      {
+                                          f(level + 1, A::intersection(A::on(proj_ghost_lca, level + 1), reference[level + 1]));
+                                      });
             if (level == 0)
             {
                 break;
@@ -1677,16 +1685,12 @@ namespace bench::sites
         for (std::size_t level = min + 1; level <= max; ++level)
         {
             f(level, A::on(A::intersection(reference[level], reference[level - 1]), level));
-            A::traverse(ghosts.prediction[level],
-                        [&](const auto& i, const auto& index)
-                        {
-                            const auto yz = to_index<dim>(index);
-                            for (auto ii = i.start; ii < i.end; ++ii)
-                            {
-                                const auto pred_ghost_lca = one_cell<B, dim>(level, ii, yz);
-                                f(level - 1, A::intersection(A::on(pred_ghost_lca, level - 1), reference[level - 1]));
-                            }
-                        });
+            for_each_one_cell<B, dim>(ghosts.prediction[level],
+                                      level,
+                                      [&](const auto& pred_ghost_lca)
+                                      {
+                                          f(level - 1, A::intersection(A::on(pred_ghost_lca, level - 1), reference[level - 1]));
+                                      });
         }
     }
 
