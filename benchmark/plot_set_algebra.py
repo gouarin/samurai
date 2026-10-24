@@ -117,8 +117,11 @@ def x_values(curve, x):
 
 
 def family_x(curves, x):
-    """The x of a family: `x`, or the level when `x` is the same at every
-    point of a curve (a site whose output does not grow with the mesh)."""
+    """Choose the x of a family: `x`, or the level.
+
+    The level replaces `x` when `x` is the same at every point of a curve (a
+    site whose output does not grow with the mesh).
+    """
     if x == "level":
         return x
     for curve in curves.values():
@@ -129,8 +132,11 @@ def family_x(curves, x):
 
 
 def plain_log_ticks(axis):
-    """Labels a log axis with plain numbers, at 1, 2 and 5 times each power
-    of ten, instead of powers of ten alone."""
+    """Label a log axis with plain numbers.
+
+    The ticks sit at 1, 2 and 5 times each power of ten, instead of powers of
+    ten alone.
+    """
     from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
     axis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
