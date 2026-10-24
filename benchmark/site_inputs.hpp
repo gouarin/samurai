@@ -355,6 +355,10 @@ namespace bench
         std::vector<std::size_t> candidates;
         std::vector<std::size_t> neighbours;
 
+        // Member by member: what the generator checks after it reads back a
+        // file it wrote.
+        bool operator==(const SiteInputs&) const = default;
+
         // MRMeshId::all_cells is MRMeshId::reference.
         const ca_t& all_cells() const
         {
@@ -412,18 +416,6 @@ namespace bench
         }
     }
 
-    template <std::size_t dim>
-    bool operator==(const SiteInputs<dim>& a, const SiteInputs<dim>& b)
-    {
-        return a.min_level == b.min_level && a.max_level == b.max_level && a.graduation_width == b.graduation_width
-            && a.max_stencil_radius == b.max_stencil_radius && a.domain_is_box == b.domain_is_box && a.periodic == b.periodic
-            && a.cells == b.cells && a.cells_and_ghosts == b.cells_and_ghosts && a.proj_cells == b.proj_cells && a.reference == b.reference
-            && a.union_ == b.union_ && a.domain_pyramid == b.domain_pyramid && a.subdomain_pyramid == b.subdomain_pyramid
-            && a.corners == b.corners && a.ungraded_cells == b.ungraded_cells && a.tag_add_m == b.tag_add_m
-            && a.tag_remove_m == b.tag_remove_m && a.tag_add_p == b.tag_add_p && a.tag_remove_p == b.tag_remove_p
-            && a.candidates == b.candidates && a.neighbours == b.neighbours;
-    }
-
     //////////////////////////////////////////////////////////////////////
     // Files
     //////////////////////////////////////////////////////////////////////
@@ -473,20 +465,24 @@ namespace bench
         return "";
     }
 
+    // The name of the files of the mesh c, without the suffix of the file.
+    template <std::size_t dim>
+    std::string mesh_stem(const MeshCase& c)
+    {
+        return std::to_string(dim) + "d_level" + std::to_string(c.max_level) + "_balls" + std::to_string(c.nballs) + "_radius"
+             + std::to_string(c.stencil_radius) + geometry_suffix(c.geometry);
+    }
+
     template <std::size_t dim>
     std::filesystem::path inputs_file(const MeshCase& c, bool moved)
     {
-        return inputs_dir()
-             / (std::to_string(dim) + "d_level" + std::to_string(c.max_level) + "_balls" + std::to_string(c.nballs) + "_radius"
-                + std::to_string(c.stencil_radius) + geometry_suffix(c.geometry) + (moved ? "_moved" : "") + ".txt");
+        return inputs_dir() / (mesh_stem<dim>(c) + (moved ? "_moved" : "") + ".txt");
     }
 
     template <std::size_t dim>
     std::filesystem::path partition_file(const MeshCase& c)
     {
-        return inputs_dir()
-             / (std::to_string(dim) + "d_level" + std::to_string(c.max_level) + "_balls" + std::to_string(c.nballs) + "_radius"
-                + std::to_string(c.stencil_radius) + geometry_suffix(c.geometry) + "_ranks" + std::to_string(c.ranks) + ".txt");
+        return inputs_dir() / (mesh_stem<dim>(c) + "_ranks" + std::to_string(c.ranks) + ".txt");
     }
 
     // Set is a LevelCellArray or a CellArray.
@@ -600,6 +596,120 @@ namespace bench
         lcl[index].add_interval({start, end});
     }
 
+    // Reads the header of a block, from the word after its magic word,
+    // which the caller read into `magic`.
+    template <std::size_t dim, class Fail>
+    void read_header(std::istream& file, const std::string& magic, SiteInputs<dim>& in, const Fail& fail)
+    {
+        int version   = 0;
+        std::size_t d = 0;
+        std::string levels_key;
+        std::string config_key;
+        std::string geometry_key;
+        file >> version >> d >> levels_key >> in.min_level >> in.max_level >> config_key >> in.graduation_width >> in.max_stencil_radius
+            >> geometry_key >> in.domain_is_box;
+        for (auto&& p : in.periodic)
+        {
+            bool periodic = false;
+            file >> periodic;
+            p = periodic;
+        }
+        if (magic != inputs_magic || version != inputs_format_version || d != dim || levels_key != "levels" || config_key != "config"
+            || geometry_key != "geometry")
+        {
+            throw fail("not a set algebra inputs file of version " + std::to_string(inputs_format_version) + " in " + std::to_string(dim)
+                       + "D");
+        }
+    }
+
+    // Reads the record "ca <name> <n>" from <n> on: the n intervals of the
+    // CellArray `name`, one per line, each after its level.
+    template <std::size_t dim, class Fail>
+    void read_cell_array(std::istream& file, const std::string& name, SiteInputs<dim>& in, const Fail& fail)
+    {
+        std::size_t n = 0;
+        file >> n;
+        samurai::CellList<dim> cl;
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            std::size_t level = 0;
+            file >> level;
+            read_interval(file, cl[level]);
+        }
+        bool found = false;
+        for (const auto& [ca_name, ca] : named_cell_arrays(in))
+        {
+            if (name == ca_name)
+            {
+                *ca   = typename SiteInputs<dim>::ca_t(cl);
+                found = true;
+            }
+        }
+        if (!found)
+        {
+            throw fail("unknown set " + name);
+        }
+    }
+
+    // Reads the record "lca corner <level> <n>" from <level> on: the n
+    // intervals of the next corner, one per line.
+    template <std::size_t dim>
+    void read_corner(std::istream& file, SiteInputs<dim>& in)
+    {
+        std::size_t level = 0;
+        std::size_t n     = 0;
+        file >> level >> n;
+        samurai::LevelCellList<dim> lcl(level);
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            read_interval(file, lcl);
+        }
+        in.corners.emplace_back(lcl);
+    }
+
+    // Reads the record "ranks <name> <n>" from <n> on: the n ranks.
+    inline void read_ranks(std::istream& file, std::vector<std::size_t>& ranks)
+    {
+        std::size_t n = 0;
+        file >> n;
+        ranks.resize(n);
+        for (auto& r : ranks)
+        {
+            file >> r;
+        }
+    }
+
+    // Reads the rest of the record whose first two words are `key` and
+    // `name`.
+    template <std::size_t dim, class Fail>
+    void read_record(std::istream& file, const std::string& key, const std::string& name, SiteInputs<dim>& in, const Fail& fail)
+    {
+        if (key == "ca")
+        {
+            read_cell_array(file, name, in, fail);
+        }
+        else if (key == "lca" && name == "corner")
+        {
+            read_corner(file, in);
+        }
+        else if (key == "ranks" && name == "candidates")
+        {
+            read_ranks(file, in.candidates);
+        }
+        else if (key == "ranks" && name == "neighbours")
+        {
+            read_ranks(file, in.neighbours);
+        }
+        else
+        {
+            throw fail("unknown record " + key + " " + name);
+        }
+        if (!file)
+        {
+            throw fail("truncated record " + key + " " + name);
+        }
+    }
+
     // Reads one block of records, its first line included, up to the end of
     // the file or the first line of the next block, whose first word it
     // leaves in `next`.
@@ -612,30 +722,11 @@ namespace bench
             file >> magic;
         }
         next.clear();
-        int version   = 0;
-        std::size_t d = 0;
-        std::string key;
-        std::string config_key;
-        std::string geometry_key;
         SiteInputs<dim> in;
-        file >> version >> d >> key >> in.min_level >> in.max_level >> config_key >> in.graduation_width >> in.max_stencil_radius
-            >> geometry_key >> in.domain_is_box;
-        for (auto&& p : in.periodic)
-        {
-            bool periodic = false;
-            file >> periodic;
-            p = periodic;
-        }
-        if (magic != inputs_magic || version != inputs_format_version || d != dim || key != "levels" || config_key != "config"
-            || geometry_key != "geometry")
-        {
-            throw fail("not a set algebra inputs file of version " + std::to_string(inputs_format_version) + " in " + std::to_string(dim)
-                       + "D");
-        }
+        read_header(file, magic, in, fail);
 
-        const auto cell_arrays = named_cell_arrays(in);
+        std::string key;
         std::string name;
-        std::size_t n = 0;
         while (file >> key)
         {
             if (key == inputs_magic)
@@ -644,59 +735,7 @@ namespace bench
                 break;
             }
             file >> name;
-            if (key == "ca")
-            {
-                file >> n;
-                samurai::CellList<dim> cl;
-                for (std::size_t k = 0; k < n; ++k)
-                {
-                    std::size_t level = 0;
-                    file >> level;
-                    read_interval(file, cl[level]);
-                }
-                bool found = false;
-                for (const auto& [ca_name, ca] : cell_arrays)
-                {
-                    if (name == ca_name)
-                    {
-                        *ca   = typename SiteInputs<dim>::ca_t(cl);
-                        found = true;
-                    }
-                }
-                if (!found)
-                {
-                    throw fail("unknown set " + name);
-                }
-            }
-            else if (key == "lca" && name == "corner")
-            {
-                std::size_t level = 0;
-                file >> level >> n;
-                samurai::LevelCellList<dim> lcl(level);
-                for (std::size_t k = 0; k < n; ++k)
-                {
-                    read_interval(file, lcl);
-                }
-                in.corners.emplace_back(lcl);
-            }
-            else if (key == "ranks" && (name == "candidates" || name == "neighbours"))
-            {
-                file >> n;
-                auto& ranks = (name == "candidates") ? in.candidates : in.neighbours;
-                ranks.resize(n);
-                for (auto& r : ranks)
-                {
-                    file >> r;
-                }
-            }
-            else
-            {
-                throw fail("unknown record " + key + " " + name);
-            }
-            if (!file)
-            {
-                throw fail("truncated record " + key + " " + name);
-            }
+            read_record(file, key, name, in, fail);
         }
         set_domain_bounds(in);
         return in;
