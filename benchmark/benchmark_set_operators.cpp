@@ -30,12 +30,12 @@ namespace
     const samurai::LevelCellArray<dim>& balls(std::size_t level)
     {
         static std::map<std::size_t, samurai::LevelCellArray<dim>> cache;
-        auto it = cache.find(level);
-        if (it == cache.end())
-        {
-            it = cache.emplace(level, bench::make_shape<dim>(Shape::balls, level, 0, (dim == 1) ? 4096 : 64)).first;
-        }
-        return it->second;
+        return bench::cached(cache,
+                             level,
+                             [&]
+                             {
+                                 return bench::make_shape<dim>(Shape::balls, level, 0, (dim == 1) ? 4096 : 64);
+                             });
     }
 
     // Shape::shell stands for the front.
@@ -47,12 +47,12 @@ namespace
         {
             return bench::front<dim>(level);
         }
-        auto it = boxes.find(level);
-        if (it == boxes.end())
-        {
-            it = boxes.emplace(level, bench::make_shape<dim>(Shape::box, level)).first;
-        }
-        return it->second;
+        return bench::cached(boxes,
+                             level,
+                             [&]
+                             {
+                                 return bench::make_shape<dim>(Shape::box, level);
+                             });
     }
 
     // Every operand differs from the others.

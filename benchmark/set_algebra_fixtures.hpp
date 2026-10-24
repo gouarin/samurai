@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <map>
 #include <numbers>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -398,17 +399,29 @@ namespace bench
         }
     }
 
+    // The entry of `key` in `cache`, make() the first time.
+    template <class Key, class T, class Make>
+    const T& cached(std::map<Key, T>& cache, const std::type_identity_t<Key>& key, Make&& make)
+    {
+        auto it = cache.find(key);
+        if (it == cache.end())
+        {
+            it = cache.emplace(key, make()).first;
+        }
+        return it->second;
+    }
+
     // make_front(level), built once per binary.
     template <std::size_t dim>
     const samurai::LevelCellArray<dim>& front(std::size_t level)
     {
         static std::map<std::size_t, samurai::LevelCellArray<dim>> cache;
-        auto it = cache.find(level);
-        if (it == cache.end())
-        {
-            it = cache.emplace(level, make_front<dim>(level)).first;
-        }
-        return it->second;
+        return cached(cache,
+                      level,
+                      [&]
+                      {
+                          return make_front<dim>(level);
+                      });
     }
 
     // The level of a synthetic benchmark, its first argument.

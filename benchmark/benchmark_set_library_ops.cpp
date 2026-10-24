@@ -54,13 +54,12 @@ namespace
     {
         static std::map<bench::mesh_key_t, bench::SiteInputs<dim>> cache;
         const auto& mesh = get_case<dim>(state).mesh;
-        const auto key   = bench::mesh_case(state).key();
-        auto it          = cache.find(key);
-        if (it == cache.end())
-        {
-            it = cache.emplace(key, bench::make_site_inputs<dim>(mesh)).first;
-        }
-        return it->second;
+        return bench::cached(cache,
+                             bench::mesh_case(state).key(),
+                             [&]
+                             {
+                                 return bench::make_site_inputs<dim>(mesh);
+                             });
     }
 
     // Time accumulated by samurai's timers during the benchmark loop, in ms
