@@ -67,6 +67,48 @@ namespace
         state.counters["t/in_row"] = benchmark::Counter(static_cast<double>(bench::count_rows(lca)),
                                                         benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
     }
+
+    // The difference of levels s of Args (L, s).
+    inline std::size_t level_difference(const benchmark::State& state)
+    {
+        return static_cast<std::size_t>(state.range(1));
+    }
+
+    // Runs make(a, L - s) on the front a at L, for Args (L, s).
+    template <std::size_t dim, class Make>
+    void run_on_fine(benchmark::State& state, Make&& make)
+    {
+        const auto& lca     = fine<dim>(state);
+        const std::size_t s = level_difference(state);
+        run(state,
+            [&]
+            {
+                return make(lca, lca.level() - s);
+            });
+        report_fine_rows(state, lca);
+    }
+
+    // Runs make(c) on the front at L coarsened to L - s beforehand, for Args
+    // (L, s).
+    template <std::size_t dim, class Make>
+    void run_on_coarsened(benchmark::State& state, Make&& make)
+    {
+        const auto& lca   = fine<dim>(state);
+        const auto coarse = coarsened(lca, level_difference(state));
+        run(state,
+            [&]
+            {
+                return make(coarse);
+            });
+        report_fine_rows(state, lca);
+    }
+
+    // The front at L - s, for Args (L, s).
+    template <std::size_t dim>
+    samurai::LevelCellArray<dim> coarse_front(const benchmark::State& state)
+    {
+        return make_front<dim>(synthetic_level(state) - level_difference(state));
+    }
 } // namespace
 
 // --- Coarsening against the level difference --------------------------------
@@ -78,34 +120,28 @@ namespace
 template <std::size_t dim>
 static void BM_Coarsen(benchmark::State& state)
 {
-    const auto& lca     = fine<dim>(state);
-    const std::size_t s = static_cast<std::size_t>(state.range(1));
-    run(state,
-        [&]
-        {
-            return samurai::self(lca).on(lca.level() - s);
-        });
-    report_fine_rows(state, lca);
+    run_on_fine<dim>(state,
+                     [](const auto& lca, std::size_t level)
+                     {
+                         return samurai::self(lca).on(level);
+                     });
 }
 
 template <std::size_t dim>
 static void BM_CoarsenPrebuilt(benchmark::State& state)
 {
-    const auto& lca   = fine<dim>(state);
-    const auto coarse = coarsened(lca, static_cast<std::size_t>(state.range(1)));
-    run(state,
-        [&]
-        {
-            return samurai::self(coarse);
-        });
-    report_fine_rows(state, lca);
+    run_on_coarsened<dim>(state,
+                          [](const auto& coarse)
+                          {
+                              return samurai::self(coarse);
+                          });
 }
 
 template <std::size_t dim>
 static void BM_CoarsenBuild(benchmark::State& state)
 {
     const auto& lca     = fine<dim>(state);
-    const std::size_t s = static_cast<std::size_t>(state.range(1));
+    const std::size_t s = level_difference(state);
     for (auto _ : state)
     {
         auto coarse = coarsened(lca, s);
@@ -151,8 +187,7 @@ template <std::size_t dim>
 static void BM_Refine(benchmark::State& state)
 {
     const std::size_t level = synthetic_level(state);
-    const std::size_t s     = static_cast<std::size_t>(state.range(1));
-    const auto coarse       = make_front<dim>(level - s);
+    const auto coarse       = coarse_front<dim>(state);
     run(state,
         [&]
         {
@@ -164,10 +199,8 @@ static void BM_Refine(benchmark::State& state)
 template <std::size_t dim>
 static void BM_RefinePrebuilt(benchmark::State& state)
 {
-    const std::size_t level = synthetic_level(state);
-    const std::size_t s     = static_cast<std::size_t>(state.range(1));
-    const auto coarse       = make_front<dim>(level - s);
-    const samurai::LevelCellArray<dim> refined(samurai::self(coarse).on(level));
+    const auto coarse = coarse_front<dim>(state);
+    const samurai::LevelCellArray<dim> refined(samurai::self(coarse).on(synthetic_level(state)));
     run(state,
         [&]
         {
@@ -282,27 +315,21 @@ BENCHMARK(BM_CoarsenThenRefine<3>)->Apply(bench::level_args<3>);
 template <std::size_t dim>
 static void BM_ExpandCoarsen(benchmark::State& state)
 {
-    const auto& lca     = fine<dim>(state);
-    const std::size_t s = static_cast<std::size_t>(state.range(1));
-    run(state,
-        [&]
-        {
-            return samurai::expand(samurai::self(lca).on(lca.level() - s), 1);
-        });
-    report_fine_rows(state, lca);
+    run_on_fine<dim>(state,
+                     [](const auto& lca, std::size_t level)
+                     {
+                         return samurai::expand(samurai::self(lca).on(level), 1);
+                     });
 }
 
 template <std::size_t dim>
 static void BM_ExpandCoarsenPrebuilt(benchmark::State& state)
 {
-    const auto& lca   = fine<dim>(state);
-    const auto coarse = coarsened(lca, static_cast<std::size_t>(state.range(1)));
-    run(state,
-        [&]
-        {
-            return samurai::expand(coarse, 1);
-        });
-    report_fine_rows(state, lca);
+    run_on_coarsened<dim>(state,
+                          [](const auto& coarse)
+                          {
+                              return samurai::expand(coarse, 1);
+                          });
 }
 
 namespace
