@@ -395,66 +395,6 @@ namespace bench
                 });
         }
 
-        template <class B, class Ctx>
-        void PartitionSubdomainExchange(Ctx& ctx)
-        {
-            const auto& ranks     = ctx.partition();
-            const auto neighbours = partition_neighbours(ranks);
-            ctx.traverse(
-                [&](auto&& f)
-                {
-                    for (std::size_t r = 0; r < ranks.size(); ++r)
-                    {
-                        sites::subdomain_exchange<B>(ranks[r], neighbours[r], f);
-                    }
-                });
-        }
-
-        template <class B, class Ctx>
-        void PartitionMeshSubMesh(Ctx& ctx)
-        {
-            const auto& ranks     = ctx.partition();
-            const auto neighbours = partition_neighbours(ranks);
-            ctx.build(
-                [&](auto&& emit)
-                {
-                    for (std::size_t r = 0; r < ranks.size(); ++r)
-                    {
-                        sites::mesh_sub_mesh<B>(ranks[r], neighbours[r], emit);
-                    }
-                });
-        }
-
-        template <class B, class Ctx>
-        void PartitionInterfaces(Ctx& ctx)
-        {
-            const auto& ranks     = ctx.partition();
-            const auto neighbours = partition_neighbours(ranks);
-            ctx.traverse(
-                [&](auto&& f)
-                {
-                    for (std::size_t r = 0; r < ranks.size(); ++r)
-                    {
-                        sites::interfaces<B>(ranks[r], neighbours[r], f);
-                    }
-                });
-        }
-
-        template <class B, class Ctx>
-        void PartitionPeriodicGhosts(Ctx& ctx)
-        {
-            const auto& ranks     = ctx.partition();
-            const auto neighbours = partition_neighbours(ranks);
-            ctx.traverse(
-                [&](auto&& f)
-                {
-                    for (std::size_t r = 0; r < ranks.size(); ++r)
-                    {
-                        sites::periodic_ghosts<B>(ranks[r], neighbours[r], f);
-                    }
-                });
-        }
-
         // Every rank peels towards each of its neighbours, from the partition
         // as it is (see sites::diffusion_peel).
         template <class B, class Ctx>
@@ -572,28 +512,30 @@ namespace bench
              {
                  call_sites::PartitionConstructSubdomain<B>(ctx);
              });
-        site("BM_Site_SubdomainExchange",
-             [](auto& ctx)
-             {
-                 call_sites::PartitionSubdomainExchange<B>(ctx);
-             });
-        site("BM_Site_MeshSubMesh",
-             [](auto& ctx)
-             {
-                 call_sites::PartitionMeshSubMesh<B>(ctx);
-             });
-        site("BM_Site_Interfaces",
-             [](auto& ctx)
-             {
-                 call_sites::PartitionInterfaces<B>(ctx);
-             });
-        site(
-            "BM_Site_PeriodicGhosts",
-            [](auto& ctx)
-            {
-                call_sites::PartitionPeriodicGhosts<B>(ctx);
-            },
-            true);
+        // A site that each rank runs with its neighbours: KIND is traverse
+        // or build (see Timing).
+#define BENCH_PER_RANK(NAME, KIND, FUNCTION, PERIODIC_ONLY)                  \
+    site(                                                                    \
+        NAME,                                                                \
+        [](auto& ctx)                                                        \
+        {                                                                    \
+            const auto& ranks     = ctx.partition();                         \
+            const auto neighbours = call_sites::partition_neighbours(ranks); \
+            ctx.KIND(                                                        \
+                [&](auto&& f)                                                \
+                {                                                            \
+                    for (std::size_t r = 0; r < ranks.size(); ++r)           \
+                    {                                                        \
+                        FUNCTION<B>(ranks[r], neighbours[r], f);             \
+                    }                                                        \
+                });                                                          \
+        },                                                                   \
+        PERIODIC_ONLY)
+        BENCH_PER_RANK("BM_Site_SubdomainExchange", traverse, sites::subdomain_exchange, false);
+        BENCH_PER_RANK("BM_Site_MeshSubMesh", build, sites::mesh_sub_mesh, false);
+        BENCH_PER_RANK("BM_Site_Interfaces", traverse, sites::interfaces, false);
+        BENCH_PER_RANK("BM_Site_PeriodicGhosts", traverse, sites::periodic_ghosts, true);
+#undef BENCH_PER_RANK
         site("BM_Site_DiffusionPeel",
              [](auto& ctx)
              {
