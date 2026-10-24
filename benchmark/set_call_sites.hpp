@@ -1466,6 +1466,33 @@ namespace bench::sites
         ((layer == static_cast<int>(Ls + 1) ? (f(std::integral_constant<std::size_t, Ls + 1>{}), 0) : 0), ...);
     }
 
+    // The domain at `level` less its translate by -direction, the boundary
+    // ghosts of the direction that
+    // update_further_ghosts_by_polynomial_extrapolation passes to
+    // apply_extrapolation_bc_ghosts (bc/apply_field_bc.hpp:784-785).
+    template <class B, std::size_t dim, class CA, class Direction>
+    auto boundary_ghosts(const SiteInputs<dim, CA>& in, std::size_t level, const Direction& direction)
+    {
+        using A      = Algebra<B>;
+        auto domain2 = A::on(in.domain(), level);
+        return A::difference(domain2, A::translate(domain2, -direction));
+    }
+
+    // The ghosts apply_extrapolation_bc_ghosts (bc/apply_field_bc.hpp:387-391)
+    // fills at `level` from the translated outer neighbours: three nested
+    // .on(level).
+    template <class B, std::size_t dim, class CA, class Outer, class Ghosts>
+    auto extrapolation_bc_ghosts(const SiteInputs<dim, CA>& in,
+                                 std::size_t level,
+                                 const Outer& translated_outer_nghbr,
+                                 const Ghosts& inner_ghosts_location)
+    {
+        using A                               = Algebra<B>;
+        auto potential_inner_cells_and_ghosts = A::on(A::intersection(translated_outer_nghbr, inner_ghosts_location), level);
+        auto inner_cells_and_ghosts           = A::on(A::intersection(potential_inner_cells_and_ghosts, in.union_[level]), level);
+        return A::on(A::difference(inner_cells_and_ghosts, in.cells[level]), level);
+    }
+
     // update_further_ghosts_by_polynomial_extrapolation(level, direction,
     // field) (bc/apply_field_bc.hpp:715), which update_outer_ghosts calls
     // for each Cartesian direction at every level from min_level to
@@ -1502,17 +1529,12 @@ namespace bench::sites
                             ghost_layer,
                             [&](auto layer_ic)
                             {
-                                constexpr std::size_t layer           = decltype(layer_ic)::value;
-                                auto domain2                          = A::on(in.domain(), level);
-                                auto boundary_ghosts                  = A::difference(domain2, A::translate(domain2, -direction));
-                                auto translated_outer_nghbr           = translated_outer_neighbours<layer, B>(reference,
+                                constexpr std::size_t layer = decltype(layer_ic)::value;
+                                auto translated_outer_nghbr = translated_outer_neighbours<layer, B>(reference,
                                                                                                     direction,
                                                                                                     std::make_index_sequence<layer>{});
-                                auto potential_inner_cells_and_ghosts = A::on(A::intersection(translated_outer_nghbr, boundary_ghosts),
-                                                                              level);
-                                auto inner_cells_and_ghosts = A::on(A::intersection(potential_inner_cells_and_ghosts, in.union_[level]),
-                                                                    level);
-                                f(level, A::on(A::difference(inner_cells_and_ghosts, cells), level));
+                                f(level,
+                                  extrapolation_bc_ghosts<B>(in, level, translated_outer_nghbr, boundary_ghosts<B>(in, level, direction)));
                             },
                             std::make_index_sequence<max_ghost_layers_PE>{});
                     }

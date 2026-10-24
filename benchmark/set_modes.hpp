@@ -21,30 +21,51 @@
 
 namespace bench::modes
 {
-    // The projection cells of each level: intersection(reference, union_),
-    // as MRMesh::update_sub_mesh_impl (mr/mesh.hpp:445) builds them, through
-    // three consumers. traverse_proj_cells only reads them;
+    // f(level, set(level)) for every level from `first` to max_level.
+    template <std::size_t dim, class CA, class F, class Set>
+    void emit_per_level(const SiteInputs<dim, CA>& in, std::size_t first, F& f, Set&& set)
+    {
+        for (std::size_t level = first; level <= in.max_level; ++level)
+        {
+            f(level, set(level));
+        }
+    }
+
+    // intersection(reference, union_) at `level`: the projection cells of
+    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:445).
+    template <class B, std::size_t dim, class CA>
+    auto proj_cells(const SiteInputs<dim, CA>& in, std::size_t level)
+    {
+        return Algebra<B>::intersection(in.reference[level], in.union_[level]);
+    }
+
+    // The projection cells of each level (proj_cells) through three
+    // consumers. traverse_proj_cells only reads them;
     // materialize_proj_cells appends them to a LevelCellArray (to_lca(),
     // LevelCellArray(set)); build_proj_cells adds them, in order, to the
     // builder of the backend (a LevelCellList for samurai), then converts it.
     template <class B, std::size_t dim, class CA, class F>
     void traverse_proj_cells(const SiteInputs<dim, CA>& in, F&& f)
     {
-        using A = Algebra<B>;
-        for (std::size_t level = 0; level <= in.max_level; ++level)
-        {
-            f(level, A::intersection(in.reference[level], in.union_[level]));
-        }
+        emit_per_level(in,
+                       0,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return proj_cells<B>(in, level);
+                       });
     }
 
     template <class B, std::size_t dim, class CA, class Emit>
     void materialize_proj_cells(const SiteInputs<dim, CA>& in, Emit&& emit)
     {
-        using A = Algebra<B>;
-        for (std::size_t level = 0; level <= in.max_level; ++level)
-        {
-            emit(level, A::materialize(A::intersection(in.reference[level], in.union_[level])));
-        }
+        emit_per_level(in,
+                       0,
+                       emit,
+                       [&](std::size_t level)
+                       {
+                           return Algebra<B>::materialize(proj_cells<B>(in, level));
+                       });
     }
 
     template <class B, std::size_t dim, class CA, class Emit>
@@ -54,7 +75,7 @@ namespace bench::modes
         for (std::size_t level = 0; level <= in.max_level; ++level)
         {
             auto builder = A::template builder<dim>(level);
-            A::traverse(A::intersection(in.reference[level], in.union_[level]), sites::add_to<dim>(builder));
+            A::traverse(proj_cells<B>(in, level), sites::add_to<dim>(builder));
             emit(level, builder.build());
         }
     }
@@ -73,11 +94,13 @@ namespace bench::modes
     template <class B, std::size_t dim, class CA, class F>
     void empty_miss(const SiteInputs<dim, CA>& in, F&& f)
     {
-        using A = Algebra<B>;
-        for (std::size_t level = 0; level <= in.max_level; ++level)
-        {
-            f(level, A::intersection(in.cells[level], in.union_[level]));
-        }
+        emit_per_level(in,
+                       0,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return Algebra<B>::intersection(in.cells[level], in.union_[level]);
+                       });
     }
 
     // contract(set, width), which samurai writes as an intersection of
@@ -88,10 +111,13 @@ namespace bench::modes
     void contract(const SiteInputs<dim, CA>& in, F&& f)
     {
         using A = Algebra<B>;
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::difference(in.cells[level], A::contract(in.domain(level), std::size_t{1})));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return A::difference(in.cells[level], A::contract(in.domain(level), std::size_t{1}));
+                       });
     }
 
     template <class B, std::size_t dim, class CA, class F>
@@ -100,10 +126,13 @@ namespace bench::modes
         using A = Algebra<B>;
         std::array<bool, dim> mask{};
         mask[0] = true;
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::difference(in.cells[level], A::contract(in.domain(level), std::size_t{1}, mask)));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return A::difference(in.cells[level], A::contract(in.domain(level), std::size_t{1}, mask));
+                       });
     }
 
     // The three forms of the expansion of the cells of each level by one
@@ -113,35 +142,41 @@ namespace bench::modes
     template <class B, std::size_t dim, class CA, class F>
     void expand_uniform(const SiteInputs<dim, CA>& in, F&& f)
     {
-        using A = Algebra<B>;
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::expand(in.cells[level], 1));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return Algebra<B>::expand(in.cells[level], 1);
+                       });
     }
 
     template <class B, std::size_t dim, class CA, class F>
     void expand_axes(const SiteInputs<dim, CA>& in, F&& f)
     {
-        using A = Algebra<B>;
         std::array<int, dim> widths;
         widths.fill(1);
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::expand(in.cells[level], widths));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return Algebra<B>::expand(in.cells[level], widths);
+                       });
     }
 
     template <class B, std::size_t dim, class CA, class F>
     void expand_masked(const SiteInputs<dim, CA>& in, F&& f)
     {
-        using A = Algebra<B>;
         std::array<bool, dim> mask;
         mask.fill(true);
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::expand(in.cells[level], 1, mask));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return Algebra<B>::expand(in.cells[level], 1, mask);
+                       });
     }
 
     // .on(level) at the level of the result, with an operand at a finer
@@ -153,20 +188,26 @@ namespace bench::modes
     void on_mixed_levels(const SiteInputs<dim, CA>& in, F&& f)
     {
         using A = Algebra<B>;
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::on(A::intersection(in.cells[level], in.domain()), level));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return A::on(A::intersection(in.cells[level], in.domain()), level);
+                       });
     }
 
     template <class B, std::size_t dim, class CA, class F>
     void on_same_level(const SiteInputs<dim, CA>& in, F&& f)
     {
         using A = Algebra<B>;
-        for (std::size_t level = in.min_level; level <= in.max_level; ++level)
-        {
-            f(level, A::on(A::intersection(in.cells[level], in.domain(level)), level));
-        }
+        emit_per_level(in,
+                       in.min_level,
+                       f,
+                       [&](std::size_t level)
+                       {
+                           return A::on(A::intersection(in.cells[level], in.domain(level)), level);
+                       });
     }
 
     // A chain of .on(level) at the level of its operands, as
@@ -182,12 +223,11 @@ namespace bench::modes
             samurai::for_each_cartesian_direction<dim>(
                 [&](const auto& direction)
                 {
-                    auto domain2                          = A::on(in.domain(), level);
-                    auto boundary_ghosts                  = A::difference(domain2, A::translate(domain2, -direction));
-                    auto translated_outer_nghbr           = A::translate(in.reference[level], -direction);
-                    auto potential_inner_cells_and_ghosts = A::on(A::intersection(translated_outer_nghbr, boundary_ghosts), level);
-                    auto inner_cells_and_ghosts = A::on(A::intersection(potential_inner_cells_and_ghosts, in.union_[level]), level);
-                    f(level, A::on(A::difference(inner_cells_and_ghosts, in.cells[level]), level));
+                    f(level,
+                      sites::extrapolation_bc_ghosts<B>(in,
+                                                        level,
+                                                        A::translate(in.reference[level], -direction),
+                                                        sites::boundary_ghosts<B>(in, level, direction)));
                 });
         }
     }
@@ -201,8 +241,7 @@ namespace bench::modes
             samurai::for_each_cartesian_direction<dim>(
                 [&](const auto& direction)
                 {
-                    auto domain2         = A::on(in.domain(), level);
-                    auto boundary_ghosts = A::difference(domain2, A::translate(domain2, -direction));
+                    auto boundary_ghosts = sites::boundary_ghosts<B>(in, level, direction);
                     f(level,
                       A::difference(A::intersection(A::translate(in.reference[level], -direction), boundary_ghosts, in.union_[level]),
                                     in.cells[level]));
