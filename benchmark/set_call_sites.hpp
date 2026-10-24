@@ -772,37 +772,19 @@ namespace bench::sites
         }
     }
 
-    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:229-460), at every mesh
-    // construction: the cells and ghosts (scheme ghosts added row by row to a
-    // cell list, in no order), the scheme ghosts the cells of the MPI
-    // neighbours give to the subdomain (lines 258-270), the periodic copies
-    // of the cells, own then of the neighbours (lines 283-322), the
-    // prediction ghosts (prediction_ghosts, added to the same cell list),
-    // then those of the cells of the neighbours and of their periodic copies
-    // (lines 385-419), then the reference cells, refined level by level where
-    // the union covers them, and the projection cells. Emits
-    // cells_and_ghosts, then reference, then proj_cells, each from level 0 to
-    // max_level + 1. In a partition, the neighbours have their own
-    // cells_and_ghosts: the scheme ghosts of their cells, which
-    // update_meshid_neighbour sends (line 384).
-    template <class B, std::size_t dim, class CA, class Emit>
-    void mesh_sub_mesh(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, Emit&& emit)
+    // The steps of mesh_sub_mesh, which add their cells to its cell list.
+    // subdomain_at(level) is the subdomain at `level`.
+
+    // The scheme ghosts the cells of the MPI neighbours give to the
+    // subdomain (mr/mesh.hpp:262-281).
+    template <class B, std::size_t dim, class CA, class SubdomainAt>
+    void add_neighbour_scheme_ghosts(BuilderList<B, dim>& cell_list,
+                                     const SiteInputs<dim, CA>& in,
+                                     const neighbours_t<dim, CA>& neighbours,
+                                     const SubdomainAt& subdomain_at)
     {
-        using A                     = Algebra<B>;
-        constexpr int pred_r        = prediction_stencil_radius;
-        const auto& cells           = in.cells;
-        const std::size_t max_level = in.max_level;
-        const int radius            = in.max_stencil_radius;
-
-        BuilderList<B, dim> cell_list(max_level);
-        add_scheme_ghosts(cell_list, cells, radius);
-        const auto cells_and_ghosts = cell_list.build();
-
-        const auto subdomain_at = [&](std::size_t level)
-        {
-            return A::on(in.subdomain(), level);
-        };
-
+        using A          = Algebra<B>;
+        const int radius = in.max_stencil_radius;
         for (const auto* neighbour : neighbours)
         {
             for_each_nonempty_level<B>(
@@ -813,9 +795,21 @@ namespace bench::sites
                                 add_to<dim>(cell_list[level]));
                 });
         }
+    }
 
-        const auto directions         = periodic_copies(in);
-        const auto add_periodic_cells = [&](const auto& subset, std::size_t level)
+    // The periodic copies of the cells, own then of the neighbours, near the
+    // subdomain (mr/mesh.hpp:283-334).
+    template <class B, std::size_t dim, class CA, class Directions, class SubdomainAt>
+    void add_periodic_cells(BuilderList<B, dim>& cell_list,
+                            const SiteInputs<dim, CA>& in,
+                            const neighbours_t<dim, CA>& neighbours,
+                            const Directions& directions,
+                            const SubdomainAt& subdomain_at)
+    {
+        using A                     = Algebra<B>;
+        const std::size_t max_level = in.max_level;
+        const int radius            = in.max_stencil_radius;
+        const auto add_copies       = [&](const auto& subset, std::size_t level)
         {
             const int delta_l = static_cast<int>(max_level - level);
             for (const auto& d : directions)
@@ -825,44 +819,33 @@ namespace bench::sites
                             add_to<dim>(cell_list[level]));
             }
         };
-        for_each_nonempty_level<B>(cells,
+        for_each_nonempty_level<B>(in.cells,
                                    [&](std::size_t level)
                                    {
-                                       add_periodic_cells(cells[level], level);
+                                       add_copies(in.cells[level], level);
                                    });
         for (const auto* neighbour : neighbours)
         {
             for_each_nonempty_level<B>(neighbour->cells,
                                        [&](std::size_t level)
                                        {
-                                           add_periodic_cells(neighbour->cells[level], level);
+                                           add_copies(neighbour->cells[level], level);
                                        });
         }
+    }
 
-        std::vector<lca_t<B, dim>> proj_cells;
-        for (std::size_t level = 0; level <= max_level + 1; ++level)
-        {
-            proj_cells.push_back(A::template builder<dim>(level).build());
-        }
-
-        if (max_level == in.min_level)
-        {
-            const auto reference = cell_list.build();
-            emit_levels(cells_and_ghosts, emit);
-            emit_levels(reference, emit);
-            emit_levels(proj_cells, emit);
-            return;
-        }
-
-        const auto add_to_level = [&](std::size_t ghost_level, const auto& set)
-        {
-            A::traverse(set, add_to<dim>(cell_list[ghost_level]));
-        };
-        for_each_nonempty_level<B>(cells,
-                                   [&](std::size_t level)
-                                   {
-                                       prediction_ghosts<B>(in, cells_and_ghosts, subdomain_at, directions, level, add_to_level);
-                                   });
+    // The prediction ghosts of the cells of the MPI neighbours and of their
+    // periodic copies (mr/mesh.hpp:388-420). add_to_level(level, set) adds
+    // the set to the cell list at `level`.
+    template <class B, std::size_t dim, class CA, class Directions, class SubdomainAt, class AddToLevel>
+    void add_neighbour_prediction_ghosts(const SiteInputs<dim, CA>& in,
+                                         const neighbours_t<dim, CA>& neighbours,
+                                         const Directions& directions,
+                                         const SubdomainAt& subdomain_at,
+                                         const AddToLevel& add_to_level)
+    {
+        using A              = Algebra<B>;
+        constexpr int pred_r = prediction_stencil_radius;
         for (const auto* neighbour : neighbours)
         {
             for_each_nonempty_level<B>(
@@ -881,7 +864,7 @@ namespace bench::sites
                     const auto& n_cag   = neighbour->cells_and_ghosts[level];
                     add(A::intersection(A::expand(A::on(n_cells, level - 2), pred_r), subdomain_at(level - 2)),
                         A::intersection(A::expand(A::on(n_cag, level - 1), pred_r), subdomain_at(level - 1)));
-                    const int delta_l = static_cast<int>(max_level - level);
+                    const int delta_l = static_cast<int>(in.max_level - level);
                     for (const auto& d : directions)
                     {
                         const auto t = shift_right(d, delta_l);
@@ -890,10 +873,16 @@ namespace bench::sites
                     }
                 });
         }
+    }
 
-        auto reference = cell_list.build();
-
-        for (std::size_t level = 0; level <= max_level; ++level)
+    // The reference cells refined level by level where the union covers
+    // them, and the projection cells (mr/mesh.hpp:440-459).
+    template <class B, std::size_t dim, class CA, class Reference>
+    void
+    refine_reference(BuilderList<B, dim>& cell_list, const SiteInputs<dim, CA>& in, Reference& reference, std::vector<lca_t<B, dim>>& proj_cells)
+    {
+        using A = Algebra<B>;
+        for (std::size_t level = 0; level <= in.max_level; ++level)
         {
             if (A::empty(reference[level]))
             {
@@ -915,6 +904,65 @@ namespace bench::sites
             reference[level + 1] = lcl.build();
             proj_cells[level]    = lcl_proj.build();
         }
+    }
+
+    // MRMesh::update_sub_mesh_impl (mr/mesh.hpp:229-461), at every mesh
+    // construction: the cells and ghosts (scheme ghosts added row by row to a
+    // cell list, in no order), the scheme ghosts the cells of the MPI
+    // neighbours give to the subdomain, the periodic copies of the cells, own
+    // then of the neighbours, the prediction ghosts (prediction_ghosts, added
+    // to the same cell list), then those of the cells of the neighbours and
+    // of their periodic copies, then the reference cells, refined level by
+    // level where the union covers them, and the projection cells: one step
+    // each, in the order of the library. Emits cells_and_ghosts, then
+    // reference, then proj_cells, each from level 0 to max_level + 1. In a
+    // partition, the neighbours have their own cells_and_ghosts: the scheme
+    // ghosts of their cells, which update_meshid_neighbour sends (line 389).
+    template <class B, std::size_t dim, class CA, class Emit>
+    void mesh_sub_mesh(const SiteInputs<dim, CA>& in, const neighbours_t<dim, CA>& neighbours, Emit&& emit)
+    {
+        using A = Algebra<B>;
+
+        BuilderList<B, dim> cell_list(in.max_level);
+        add_scheme_ghosts(cell_list, in.cells, in.max_stencil_radius);
+        const auto cells_and_ghosts = cell_list.build();
+
+        const auto subdomain_at = [&](std::size_t level)
+        {
+            return A::on(in.subdomain(), level);
+        };
+        add_neighbour_scheme_ghosts(cell_list, in, neighbours, subdomain_at);
+        const auto directions = periodic_copies(in);
+        add_periodic_cells(cell_list, in, neighbours, directions, subdomain_at);
+
+        std::vector<lca_t<B, dim>> proj_cells;
+        for (std::size_t level = 0; level <= in.max_level + 1; ++level)
+        {
+            proj_cells.push_back(A::template builder<dim>(level).build());
+        }
+
+        if (in.max_level == in.min_level)
+        {
+            const auto reference = cell_list.build();
+            emit_levels(cells_and_ghosts, emit);
+            emit_levels(reference, emit);
+            emit_levels(proj_cells, emit);
+            return;
+        }
+
+        const auto add_to_level = [&](std::size_t ghost_level, const auto& set)
+        {
+            A::traverse(set, add_to<dim>(cell_list[ghost_level]));
+        };
+        for_each_nonempty_level<B>(in.cells,
+                                   [&](std::size_t level)
+                                   {
+                                       prediction_ghosts<B>(in, cells_and_ghosts, subdomain_at, directions, level, add_to_level);
+                                   });
+        add_neighbour_prediction_ghosts<B>(in, neighbours, directions, subdomain_at, add_to_level);
+
+        auto reference = cell_list.build();
+        refine_reference(cell_list, in, reference, proj_cells);
         // the library builds the reference cells once more from the cell
         // list (mr/mesh.hpp:458), which holds the same cells
         reference = cell_list.build();
