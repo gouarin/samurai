@@ -8,3 +8,10 @@ foreach(name 1d 2d 3d user_pred_1d)
     target_compile_definitions(euler_${name} PRIVATE EXP_FORCE_INLINE)
   endif()
 endforeach()
+
+# The MUSCL flux function alone, without any mesh traversal.
+add_executable(flux_bench flux_bench.cpp)
+target_link_libraries(flux_bench PRIVATE samurai)
+if(EXP_FORCE_INLINE)
+  target_compile_definitions(flux_bench PRIVATE EXP_FORCE_INLINE)
+endif()

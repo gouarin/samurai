@@ -57,6 +57,22 @@ struct MusclOptions
     int direction = -1;
 };
 
+// EXP_COUNT_FLUX counts the calls of the MUSCL flux function and prints the total at exit.
+// It is meant for a counting build, never for a timed one.
+#ifdef EXP_COUNT_FLUX
+#include <cstdio>
+struct ExpFluxCounter
+{
+    std::size_t calls = 0;
+
+    ~ExpFluxCounter()
+    {
+        std::printf("muscl flux calls: %zu\n", calls);
+    }
+};
+inline ExpFluxCounter exp_flux_counter;
+#endif
+
 template <riemann::Solver solver, class Field, class Eos>
 auto make_muscl_scheme(Eos eos, const MusclOptions& options)
 {
@@ -84,6 +100,9 @@ auto make_muscl_scheme(Eos eos, const MusclOptions& options)
             muscl[d].cons_flux_function =
                 [eos, options](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& data, const samurai::StencilValues<cfg>& field)
             {
+#ifdef EXP_COUNT_FLUX
+                ++exp_flux_counter.calls;
+#endif
                 const auto w0 = pack<dim>(cons2prim<dim>(field[0], eos));
                 const auto w1 = pack<dim>(cons2prim<dim>(field[1], eos));
                 const auto w2 = pack<dim>(cons2prim<dim>(field[2], eos));
