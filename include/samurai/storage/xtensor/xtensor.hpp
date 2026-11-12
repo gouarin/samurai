@@ -137,6 +137,72 @@ namespace samurai
         }
     }
 
+#if defined(SAMURAI_EXP_EAGER_ARRAY) || defined(SAMURAI_EXP_EAGER_LOCAL)
+    template <class T, std::size_t N>
+    struct StdArrayWrapper;
+
+    // Experiment: view on the values of one cell, which an eager array can be assigned to.
+    template <class View>
+    struct cell_view : View
+    {
+        using View::operator=;
+        using View::operator+=;
+        using View::operator-=;
+
+        explicit cell_view(View&& v)
+            : View(std::move(v))
+        {
+        }
+
+        template <class T, std::size_t N>
+        cell_view& operator=(const StdArrayWrapper<T, N>& a)
+        {
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                (*this)(i) = a[i];
+            }
+            return *this;
+        }
+
+        template <class T, std::size_t N>
+        cell_view& operator+=(const StdArrayWrapper<T, N>& a)
+        {
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                (*this)(i) += a[i];
+            }
+            return *this;
+        }
+
+        template <class T, std::size_t N>
+        cell_view& operator-=(const StdArrayWrapper<T, N>& a)
+        {
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                (*this)(i) -= a[i];
+            }
+            return *this;
+        }
+    };
+
+    template <xtensor_container_like Container>
+    auto view(Container& container, std::size_t index)
+    {
+        using traits = detail::xtensor_container_traits<std::remove_const_t<Container>>;
+        if constexpr (traits::size == 1 && !traits::can_collapse)
+        {
+            return cell_view(xt::view(container.data(), xt::all(), index));
+        }
+        else if constexpr (traits::size == 1)
+        {
+            return xt::view(container.data(), index);
+        }
+        else
+        {
+            return cell_view(xt::view(container.data(), index));
+        }
+    }
+#else
     template <xtensor_container_like Container>
     auto view(Container& container, std::size_t index)
     {
@@ -150,6 +216,7 @@ namespace samurai
             return xt::view(container.data(), index);
         }
     }
+#endif
 
     template <class D>
     auto eval(const xt::xexpression<D>& exp)

@@ -36,7 +36,11 @@ namespace samurai
     using field_data_storage_t = eigen_container<value_type, size>;
 
     template <class value_type, std::size_t size, bool can_collapse = true>
+#if defined(SAMURAI_EXP_EAGER_ARRAY) || defined(SAMURAI_EXP_EAGER_LOCAL)
+    using local_field_data_t = collapsable_algebraic_std_array<value_type, size, can_collapse>;
+#else
     using local_field_data_t = eigen_collapsable_static_array<value_type, size, can_collapse>;
+#endif
 
     template <class T>
     using default_view_t = Eigen::IndexedView<T, Eigen::internal::ArithmeticSequenceRange<16777215, -1, 16777215>, Eigen::internal::SingleRange<0>>;
@@ -46,7 +50,11 @@ namespace samurai
     using field_data_storage_t = xtensor_container<value_type, size, can_collapse>;
 
     template <class value_type, std::size_t size, bool can_collapse = true>
+#if defined(SAMURAI_EXP_EAGER_ARRAY) || defined(SAMURAI_EXP_EAGER_LOCAL)
+    using local_field_data_t = collapsable_algebraic_std_array<value_type, size, can_collapse>;
+#else
     using local_field_data_t = xtensor_collapsable_static_array<value_type, size, can_collapse>;
+#endif
 
     template <class T>
     using default_view_t = xt::xview<T&, xt::xstepped_range<long>>;
@@ -56,8 +64,11 @@ namespace samurai
     // Static array //
     //--------------//
 
+    // SAMURAI_EXP_EAGER_ARRAY (experiment): eager std::array instead of a lazy container.
     template <class value_type, std::size_t size>
-#if defined(SAMURAI_FIELD_CONTAINER_EIGEN3)
+#if defined(SAMURAI_EXP_EAGER_ARRAY)
+    using Array = StdArrayWrapper<value_type, size>;
+#elif defined(SAMURAI_FIELD_CONTAINER_EIGEN3)
     using Array = eigen_static_array<value_type, size>;
 #else // SAMURAI_FIELD_CONTAINER_XTENSOR
     using Array = xtensor_static_array<value_type, size>;

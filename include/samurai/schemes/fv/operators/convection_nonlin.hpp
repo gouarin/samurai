@@ -317,8 +317,14 @@ namespace samurai
                     auto dlambda_dud = 0.5 * diff_smooth_abs(0.5 * (uL(d) + uR(d)));
 
                     // Add the lambda derivative terms (only affects d-th column)
-                    xt::col(jac[left], d) -= 0.5 * dlambda_dud * (uR - uL);
-                    xt::col(jac[right], d) -= 0.5 * dlambda_dud * (uR - uL);
+                    // Written per component: 'uR - uL' may not be an xtensor expression.
+                    const auto jump       = uR - uL;
+                    const double half_dld = 0.5 * dlambda_dud;
+                    for (std::size_t i = 0; i < n_comp; ++i)
+                    {
+                        jac[left](i, d) -= half_dld * jump(i);
+                        jac[right](i, d) -= half_dld * jump(i);
+                    }
 
                     auto Identity = eye<double, dim, dim, false>();
                     jac[left] += 0.5 * lambda * Identity;

@@ -23,7 +23,7 @@ struct EulerLayout
 // One state of the system, whichever variables it is written in: the layout
 // above says which component is what.
 template <std::size_t Dim>
-using ConsArray = xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>;
+using ConsArray = samurai::Array<double, EulerLayout<Dim>::size>;
 
 template <std::size_t Dim>
 struct PrimState
@@ -69,7 +69,7 @@ PrimState<Dim> unpack(const Array& w)
 }
 
 template <std::size_t Dim, class Eos>
-auto cons2prim(const xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>& conserved, Eos eos)
+auto cons2prim(const ConsArray<Dim>& conserved, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
@@ -90,7 +90,7 @@ auto prim2cons(const PrimState<Dim>& primitives, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
-    xt::xtensor_fixed<double, xt::xshape<EulerConsVar::size>> conserved;
+    ConsArray<Dim> conserved;
 
     conserved[EulerConsVar::rho]  = primitives.rho;
     auto e                        = eos.e(primitives.rho, primitives.p);

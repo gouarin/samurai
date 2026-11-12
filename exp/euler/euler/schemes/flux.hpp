@@ -10,7 +10,7 @@ auto compute_flux(const PrimState<Dim>& prim, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
-    auto flux = xt::xtensor_fixed<double, xt::xshape<EulerConsVar::size>>{};
+    auto flux = ConsArray<Dim>{};
 
     flux[EulerConsVar::rho]  = prim.rho * prim.v[d];
     auto e                   = eos.e(prim.rho, prim.p);
