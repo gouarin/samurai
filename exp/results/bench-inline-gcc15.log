@@ -1,0 +1,78 @@
+ 16:43:13 up 4 days, 23:17,  0 users,  load average: 0.77, 0.43, 0.26
+# DMR level 3-7
+dmr      base       r1 rc=0 op=7.089    total=10.683   wall=11.09   load=0.77 reference
+dmr      baseinl    r1 rc=0 op=5.304    total=8.762    wall=9.17    load=0.80 DIFFERENT
+dmr      B          r1 rc=0 op=6.578    total=10.057   wall=10.46   load=0.83 DIFFERENT
+dmr      Binl       r1 rc=0 op=4.970    total=8.479    wall=8.89    load=0.87 DIFFERENT
+dmr      clang-B    r1 rc=0 op=4.575    total=8.182    wall=8.59    load=0.88 DIFFERENT
+dmr      base       r2 rc=0 op=7.145    total=10.750   wall=11.16   load=0.90 identical
+dmr      baseinl    r2 rc=0 op=5.549    total=9.367    wall=9.77    load=0.92 DIFFERENT
+dmr      B          r2 rc=0 op=6.858    total=10.637   wall=11.04   load=0.94 DIFFERENT
+dmr      Binl       r2 rc=0 op=5.074    total=8.723    wall=9.13    load=0.95 DIFFERENT
+dmr      clang-B    r2 rc=0 op=4.696    total=8.486    wall=8.89    load=0.95 DIFFERENT
+dmr      base       r3 rc=0 op=6.984    total=10.580   wall=10.99   load=0.96 identical
+dmr      baseinl    r3 rc=0 op=5.305    total=8.734    wall=9.14    load=1.04 DIFFERENT
+dmr      B          r3 rc=0 op=6.559    total=10.039   wall=10.45   load=1.11 DIFFERENT
+dmr      Binl       r3 rc=0 op=4.916    total=8.367    wall=8.77    load=1.09 DIFFERENT
+dmr      clang-B    r3 rc=0 op=4.451    total=7.945    wall=8.35    load=1.15 DIFFERENT
+ 16:47:32 up 4 days, 23:21,  0 users,  load average: 0.84, 0.71, 0.42
+# DMR level 3-7, second session, with clang-Binl
+dmr      base       r1 rc=0 op=6.979    total=10.451   wall=10.86   load=0.84 reference
+dmr      baseinl    r1 rc=0 op=5.327    total=8.771    wall=9.18    load=0.86 DIFFERENT
+dmr      B          r1 rc=0 op=6.595    total=10.105   wall=10.51   load=0.89 DIFFERENT
+dmr      Binl       r1 rc=0 op=5.169    total=8.903    wall=9.31    load=0.98 DIFFERENT
+dmr      clang-B    r1 rc=0 op=4.706    total=8.515    wall=8.92    load=0.99 DIFFERENT
+dmr      clang-Binl r1 rc=0 op=3.591    total=7.536    wall=7.94    load=0.99 DIFFERENT
+dmr      base       r2 rc=0 op=7.219    total=10.834   wall=11.24   load=0.99 identical
+dmr      baseinl    r2 rc=0 op=5.571    total=9.343    wall=9.75    load=0.99 DIFFERENT
+dmr      B          r2 rc=0 op=6.826    total=10.530   wall=10.94   load=0.99 DIFFERENT
+dmr      Binl       r2 rc=0 op=5.191    total=8.925    wall=9.33    load=1.00 DIFFERENT
+dmr      clang-B    r2 rc=0 op=4.663    total=8.413    wall=8.82    load=1.00 DIFFERENT
+dmr      clang-Binl r2 rc=0 op=3.564    total=7.142    wall=7.55    load=1.00 DIFFERENT
+dmr      base       r3 rc=0 op=7.135    total=10.794   wall=11.20   load=1.00 identical
+dmr      baseinl    r3 rc=0 op=5.608    total=9.398    wall=9.81    load=1.00 DIFFERENT
+dmr      B          r3 rc=0 op=6.886    total=10.658   wall=11.07   load=1.00 DIFFERENT
+dmr      Binl       r3 rc=0 op=5.130    total=8.832    wall=9.24    load=1.00 DIFFERENT
+dmr      clang-B    r3 rc=0 op=4.563    total=8.117    wall=8.52    load=1.00 DIFFERENT
+dmr      clang-Binl r3 rc=0 op=3.370    total=6.939    wall=7.35    load=1.07 DIFFERENT
+# h5cmp level 7: clang-B-1 vs clang-Binl-1
+# h5cmp level 7: Binl-1 vs clang-Binl-1
+mesh/fields/pressure max abs diff 3.367915724084014e-09 max abs value 533.6716955141351
+mesh/fields/rho max abs diff 2.085620565139834e-10 max abs value 21.220193387531904
+mesh/fields/velocity_0 max abs diff 3.235012258073766e-11 max abs value 16.79755920579343
+mesh/fields/velocity_1 max abs diff 2.848143942912884e-11 max abs value 4.2315813821108375
+ 16:50:32 up 4 days, 23:24,  0 users,  load average: 1.06, 0.87, 0.54
+# DMR level 3-8
+dmr      base       r1 rc=0 op=40.088   total=57.983   wall=58.39   load=1.06 reference
+dmr      baseinl    r1 rc=0 op=30.926   total=48.702   wall=49.11   load=1.02 DIFFERENT
+dmr      B          r1 rc=0 op=38.036   total=55.848   wall=56.25   load=1.01 DIFFERENT
+dmr      Binl       r1 rc=0 op=28.800   total=46.725   wall=47.13   load=1.00 DIFFERENT
+dmr      clang-B    r1 rc=0 op=26.285   total=44.824   wall=45.23   load=1.00 DIFFERENT
+dmr      clang-Binl r1 rc=0 op=20.560   total=39.088   wall=39.50   load=1.04 DIFFERENT
+dmr      base       r2 rc=0 op=40.483   total=58.357   wall=58.76   load=1.02 identical
+dmr      baseinl    r2 rc=0 op=31.531   total=49.719   wall=50.13   load=1.05 DIFFERENT
+dmr      B          r2 rc=0 op=39.772   total=58.780   wall=59.19   load=1.02 DIFFERENT
+dmr      Binl       r2 rc=0 op=29.859   total=48.672   wall=49.08   load=1.01 DIFFERENT
+dmr      clang-B    r2 rc=0 op=26.626   total=45.434   wall=45.84   load=1.05 DIFFERENT
+dmr      clang-Binl r2 rc=0 op=19.948   total=38.597   wall=39.00   load=1.02 DIFFERENT
+dmr      base       r3 rc=0 op=41.746   total=60.379   wall=60.79   load=1.08 identical
+dmr      baseinl    r3 rc=0 op=31.365   total=49.654   wall=50.06   load=1.08 DIFFERENT
+dmr      B          r3 rc=0 op=39.183   total=57.851   wall=58.26   load=1.03 DIFFERENT
+dmr      Binl       r3 rc=0 op=29.179   total=47.393   wall=47.81   load=1.01 DIFFERENT
+dmr      clang-B    r3 rc=0 op=26.703   total=45.705   wall=46.11   load=1.00 DIFFERENT
+dmr      clang-Binl r3 rc=0 op=20.044   total=38.915   wall=39.32   load=1.00 DIFFERENT
+# h5cmp level 8: base-1 vs baseinl-1
+mesh/fields/pressure max abs diff 0.0001375364762452591 max abs value 585.6871971373287
+mesh/fields/rho max abs diff 4.7237467303062886e-05 max abs value 22.95254656338689
+mesh/fields/velocity_0 max abs diff 9.070451056913953e-07 max abs value 17.956374968998617
+mesh/fields/velocity_1 max abs diff 1.4595717521270757e-06 max abs value 4.231318967427214
+# h5cmp level 8: B-1 vs Binl-1
+mesh/fields/pressure max abs diff 0.0002229911784752403 max abs value 585.6871970632442
+mesh/fields/rho max abs diff 7.588075262177085e-05 max abs value 22.952546538936907
+mesh/fields/velocity_0 max abs diff 1.4389665725644818e-06 max abs value 17.95637496899861
+mesh/fields/velocity_1 max abs diff 1.7110625238903054e-06 max abs value 4.231318967427218
+# h5cmp level 8: clang-B-1 vs clang-Binl-1
+ 17:05:41 up 4 days, 23:40,  0 users,  load average: 1.07, 1.02, 0.87
+# DMR level 3-7, -ffp-contract=off, one run (result check only)
+dmr      B-nofma    r1 rc=0 op=6.784    total=10.412   wall=10.82   load=0.99 reference
+dmr      Binl-nofma r1 rc=0 op=5.118    total=8.735    wall=9.14    load=0.99 identical
