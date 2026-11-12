@@ -1,4 +1,6 @@
-# Copy of samurai-euler (2D case only), built against this tree for the eager array experiment.
-add_executable(euler_2d main_2d.cpp)
-target_link_libraries(euler_2d PRIVATE samurai CLI11::CLI11)
-target_compile_definitions(euler_2d PRIVATE SAMURAI_VERSION="exp-eager-array")
+# Copy of samurai-euler, built against this tree for the eager array experiment.
+foreach(name 1d 2d 3d user_pred_1d)
+  add_executable(euler_${name} main_${name}.cpp)
+  target_link_libraries(euler_${name} PRIVATE samurai CLI11::CLI11)
+  target_compile_definitions(euler_${name} PRIVATE SAMURAI_VERSION="exp-eager-array")
+endforeach()

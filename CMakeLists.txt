@@ -291,6 +291,20 @@ else()
   add_subdirectory(demos EXCLUDE_FROM_ALL)
 endif()
 
+# Experiment: small fixed-size vectors (Array, local field values) as StdArrayWrapper.
+option(SAMURAI_EXP_EAGER_ARRAY "Experiment: eager std::array for Array and local field values" OFF)
+if(SAMURAI_EXP_EAGER_ARRAY)
+  target_compile_definitions(samurai INTERFACE SAMURAI_EXP_EAGER_ARRAY)
+endif()
+# Same, restricted to the local field values (StencilValues): Array keeps its lazy container.
+option(SAMURAI_EXP_EAGER_LOCAL "Experiment: eager std::array for local field values only" OFF)
+if(SAMURAI_EXP_EAGER_LOCAL)
+  target_compile_definitions(samurai INTERFACE SAMURAI_EXP_EAGER_LOCAL)
+endif()
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/exp/euler/CMakeLists.txt)
+  add_subdirectory(exp/euler EXCLUDE_FROM_ALL)
+endif()
+
 if(NOT SAMURAI_FIELD_CONTAINER IN_LIST FIELD_CONTAINER_LIST)
   message(FATAL_ERROR "SAMURAI_FIELD_CONTAINER must be one of: ${FIELD_CONTAINER_LIST}")
 else()
