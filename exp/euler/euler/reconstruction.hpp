@@ -69,7 +69,7 @@ inline SlopeLimiter slope_limiter_from_name(const std::string& name)
 // The slope over one cell width, from the two one-sided differences
 // dm = w_i - w_{i-1} and dp = w_{i+1} - w_i.
 template <SlopeLimiter limiter>
-double limited_slope(double dm, double dp)
+EULER_INLINE double limited_slope(double dm, double dp)
 {
     if constexpr (limiter == SlopeLimiter::none)
     {
@@ -101,7 +101,7 @@ double limited_slope(double dm, double dp)
 
 // The same, component by component, on a packed primitive state.
 template <SlopeLimiter limiter, std::size_t Dim, class Array>
-ConsArray<Dim> limited_slope(const Array& dm, const Array& dp)
+EULER_INLINE ConsArray<Dim> limited_slope(const Array& dm, const Array& dp)
 {
     ConsArray<Dim> slope;
     for (std::size_t i = 0; i < EulerLayout<Dim>::size; ++i)
@@ -136,7 +136,7 @@ ConsArray<Dim> limited_slope(const Array& dm, const Array& dp)
 // =============================================================================
 
 template <std::size_t d, std::size_t Dim, class Array, class Eos>
-ConsArray<Dim> primitive_jacobian_times(const PrimState<Dim>& prim, const Array& slope, Eos eos)
+EULER_INLINE ConsArray<Dim> primitive_jacobian_times(const PrimState<Dim>& prim, const Array& slope, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
@@ -163,7 +163,7 @@ ConsArray<Dim> primitive_jacobian_times(const PrimState<Dim>& prim, const Array&
 // limiter stays a command line option without being a template parameter of
 // every scheme.
 template <std::size_t Dim, class Array>
-ConsArray<Dim> limited_slope(const Array& dm, const Array& dp, SlopeLimiter limiter)
+EULER_INLINE ConsArray<Dim> limited_slope(const Array& dm, const Array& dp, SlopeLimiter limiter)
 {
     switch (limiter)
     {

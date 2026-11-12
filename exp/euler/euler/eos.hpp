@@ -5,6 +5,14 @@
 
 #include <cmath>
 
+// EXP_FORCE_INLINE forces the helpers of the flux chain into their caller.
+// Without it they are left to the compiler's own inlining decisions.
+#ifdef EXP_FORCE_INLINE
+#define EULER_INLINE inline __attribute__((always_inline))
+#else
+#define EULER_INLINE
+#endif
+
 // =============================================================================
 //  Equations of state
 // -----------------------------------------------------------------------------

@@ -1,6 +1,10 @@
 # Copy of samurai-euler, built against this tree for the eager array experiment.
+option(EXP_FORCE_INLINE "Experiment: force the inlining of the flux chain of samurai-euler" OFF)
 foreach(name 1d 2d 3d user_pred_1d)
   add_executable(euler_${name} main_${name}.cpp)
   target_link_libraries(euler_${name} PRIVATE samurai CLI11::CLI11)
   target_compile_definitions(euler_${name} PRIVATE SAMURAI_VERSION="exp-eager-array")
+  if(EXP_FORCE_INLINE)
+    target_compile_definitions(euler_${name} PRIVATE EXP_FORCE_INLINE)
+  endif()
 endforeach()

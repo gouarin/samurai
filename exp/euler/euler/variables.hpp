@@ -39,7 +39,7 @@ struct PrimState
 // on an array and clumsy on the struct, so slopes and face values are carried
 // this way and unpacked when a flux is finally asked for.
 template <std::size_t Dim>
-ConsArray<Dim> pack(const PrimState<Dim>& prim)
+EULER_INLINE ConsArray<Dim> pack(const PrimState<Dim>& prim)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
@@ -54,7 +54,7 @@ ConsArray<Dim> pack(const PrimState<Dim>& prim)
 }
 
 template <std::size_t Dim, class Array>
-PrimState<Dim> unpack(const Array& w)
+EULER_INLINE PrimState<Dim> unpack(const Array& w)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
@@ -69,7 +69,7 @@ PrimState<Dim> unpack(const Array& w)
 }
 
 template <std::size_t Dim, class Eos>
-auto cons2prim(const ConsArray<Dim>& conserved, Eos eos)
+EULER_INLINE auto cons2prim(const ConsArray<Dim>& conserved, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
@@ -86,7 +86,7 @@ auto cons2prim(const ConsArray<Dim>& conserved, Eos eos)
 }
 
 template <std::size_t Dim, class Eos>
-auto prim2cons(const PrimState<Dim>& primitives, Eos eos)
+EULER_INLINE auto prim2cons(const PrimState<Dim>& primitives, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 

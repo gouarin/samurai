@@ -27,7 +27,7 @@
 namespace riemann
 {
     template <std::size_t d, std::size_t Dim, class ConsL, class ConsR, class Eos>
-    ConsArray<Dim> rusanov(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
+    EULER_INLINE ConsArray<Dim> rusanov(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
     {
         const auto cL = eos.c(primL.rho, primL.p);
         const auto cR = eos.c(primR.rho, primR.p);
@@ -38,7 +38,7 @@ namespace riemann
     }
 
     template <std::size_t d, std::size_t Dim, class ConsL, class ConsR, class Eos>
-    ConsArray<Dim> hll(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
+    EULER_INLINE ConsArray<Dim> hll(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
     {
         const auto cL = eos.c(primL.rho, primL.p);
         const auto cR = eos.c(primR.rho, primR.p);
@@ -59,7 +59,7 @@ namespace riemann
 
     // The state between the contact and the wave of speed s, for HLLC.
     template <std::size_t d, std::size_t Dim, class Eos>
-    ConsArray<Dim> star_state(const PrimState<Dim>& prim, double s, double s_star, Eos eos)
+    EULER_INLINE ConsArray<Dim> star_state(const PrimState<Dim>& prim, double s, double s_star, Eos eos)
     {
         using EulerConsVar = EulerLayout<Dim>;
         ConsArray<Dim> q_star;
@@ -82,7 +82,7 @@ namespace riemann
     }
 
     template <std::size_t d, std::size_t Dim, class ConsL, class ConsR, class Eos>
-    ConsArray<Dim> hllc(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
+    EULER_INLINE ConsArray<Dim> hllc(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
     {
         const auto cL = eos.c(primL.rho, primL.p);
         const auto cR = eos.c(primR.rho, primR.p);
@@ -134,7 +134,7 @@ namespace riemann
     }
 
     template <Solver s, std::size_t d, std::size_t Dim, class ConsL, class ConsR, class Eos>
-    ConsArray<Dim> solve(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
+    EULER_INLINE ConsArray<Dim> solve(const PrimState<Dim>& primL, const ConsL& qL, const PrimState<Dim>& primR, const ConsR& qR, Eos eos)
     {
         if constexpr (s == Solver::rusanov)
         {
