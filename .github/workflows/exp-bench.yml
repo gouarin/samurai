@@ -1,0 +1,34 @@
+# Throwaway: times the eager array experiment on GitHub-hosted x86-64 and aarch64 runners.
+name: exp-eager-array-bench
+
+on:
+    push:
+        branches: [exp/eager-array]
+
+jobs:
+    bench:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-24.04, ubuntu-24.04-arm]
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Mamba and samurai env installation
+              uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+              with:
+                  environment-file: conda/environment.yml
+                  environment-name: samurai-env
+                  create-args: gxx=15 binutils bc
+
+            - name: Clang installation
+              shell: bash -el {0}
+              continue-on-error: true
+              run: |
+                  micromamba install -y clangxx=16 || micromamba install -y clangxx
+
+            - name: Build and time
+              shell: bash -el {0}
+              run: |
+                  bash exp/ci_bench.sh
