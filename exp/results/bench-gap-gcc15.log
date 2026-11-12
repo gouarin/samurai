@@ -1,0 +1,87 @@
+ 17:17:27 up 4 days, 23:51,  0 users,  load average: 0.75, 0.64, 0.69
+# DMR level 3-7, GCC options on B + inline
+dmr      Binl       r1 rc=0 op=4.965    total=8.440    wall=8.85    load=0.75 reference
+dmr      Binl-noerrno r1 rc=0 op=4.988    total=8.474    wall=8.88    load=0.77 identical
+dmr      Binl-noslp r1 rc=0 op=5.005    total=8.525    wall=8.93    load=0.81 identical
+dmr      Binl-noerrno-noslp r1 rc=0 op=5.008    total=8.520    wall=8.93    load=0.84 identical
+dmr      Binl-novec r1 rc=0 op=3.182    total=6.879    wall=7.29    load=0.86 DIFFERENT
+dmr      Binl-noerrno-novec r1 rc=0 op=3.255    total=6.912    wall=7.32    load=0.87 DIFFERENT
+dmr      clang-Binl r1 rc=0 op=3.350    total=6.902    wall=7.31    load=0.89 DIFFERENT
+dmr      Binl       r2 rc=0 op=4.940    total=8.389    wall=8.80    load=0.91 identical
+dmr      Binl-noerrno r2 rc=0 op=4.950    total=8.422    wall=8.83    load=0.92 identical
+dmr      Binl-noslp r2 rc=0 op=4.919    total=8.444    wall=8.85    load=0.93 identical
+dmr      Binl-noerrno-noslp r2 rc=0 op=4.980    total=8.528    wall=8.93    load=0.94 identical
+dmr      Binl-novec r2 rc=0 op=3.238    total=6.890    wall=7.30    load=0.95 DIFFERENT
+dmr      Binl-noerrno-novec r2 rc=0 op=3.266    total=6.941    wall=7.35    load=0.96 DIFFERENT
+dmr      clang-Binl r2 rc=0 op=3.358    total=6.921    wall=7.33    load=0.96 DIFFERENT
+dmr      Binl       r3 rc=0 op=4.965    total=8.467    wall=8.87    load=0.97 identical
+dmr      Binl-noerrno r3 rc=0 op=4.935    total=8.457    wall=8.86    load=0.97 identical
+dmr      Binl-noslp r3 rc=0 op=4.981    total=8.499    wall=8.91    load=0.98 identical
+dmr      Binl-noerrno-noslp r3 rc=0 op=5.000    total=8.474    wall=8.88    load=0.98 identical
+dmr      Binl-novec r3 rc=0 op=3.197    total=6.832    wall=7.24    load=0.98 DIFFERENT
+dmr      Binl-noerrno-novec r3 rc=0 op=3.267    total=6.915    wall=7.32    load=0.99 DIFFERENT
+dmr      clang-Binl r3 rc=0 op=3.357    total=6.907    wall=7.31    load=0.99 DIFFERENT
+# h5cmp level 7: Binl-1 vs Binl-noerrno-1
+bit-identical (h5diff)
+# h5cmp level 7: Binl-1 vs Binl-noslp-1
+bit-identical (h5diff)
+# h5cmp level 7: Binl-1 vs Binl-noerrno-noslp-1
+bit-identical (h5diff)
+# h5cmp level 7: Binl-1 vs Binl-novec-1
+mesh/fields/pressure max abs diff 1.284377049159957e-09 max abs value 533.6716955141351
+mesh/fields/rho max abs diff 1.1595346904869075e-10 max abs value 21.220193387531904
+mesh/fields/velocity_0 max abs diff 1.9321433342156524e-11 max abs value 16.79755920579343
+mesh/fields/velocity_1 max abs diff 1.180588959925899e-11 max abs value 4.2315813821108375
+# h5cmp level 7: Binl-1 vs Binl-noerrno-novec-1
+mesh/fields/pressure max abs diff 1.284377049159957e-09 max abs value 533.6716955141351
+mesh/fields/rho max abs diff 1.1595346904869075e-10 max abs value 21.220193387531904
+mesh/fields/velocity_0 max abs diff 1.9321433342156524e-11 max abs value 16.79755920579343
+mesh/fields/velocity_1 max abs diff 1.180588959925899e-11 max abs value 4.2315813821108375
+ 17:20:28 up 4 days, 23:54,  0 users,  load average: 1.06, 0.83, 0.76
+ 19:07:32 up 5 days, 7 min,  0 users,  load average: 0.45, 0.46, 0.54
+# DMR level 3-7, loop vectorizer off
+dmr      Binl       r1 rc=0 op=4.880    total=8.279    wall=8.69    load=0.45 reference
+dmr      Binl-noloopvec r1 rc=0 op=3.270    total=7.220    wall=7.63    load=0.53 DIFFERENT
+dmr      Binl-novec r1 rc=0 op=3.328    total=7.211    wall=7.62    load=0.60 DIFFERENT
+dmr      clang-Binl r1 rc=0 op=3.539    total=7.321    wall=7.73    load=0.64 DIFFERENT
+dmr      Binl       r2 rc=0 op=5.130    total=8.886    wall=9.29    load=0.69 identical
+dmr      Binl-noloopvec r2 rc=0 op=3.308    total=7.336    wall=7.74    load=0.74 DIFFERENT
+dmr      Binl-novec r2 rc=0 op=3.321    total=7.215    wall=7.62    load=0.78 DIFFERENT
+dmr      clang-Binl r2 rc=0 op=3.563    total=7.364    wall=7.77    load=0.80 DIFFERENT
+dmr      Binl       r3 rc=0 op=5.199    total=9.003    wall=9.41    load=0.83 identical
+dmr      Binl-noloopvec r3 rc=0 op=3.207    total=7.083    wall=7.49    load=0.86 DIFFERENT
+dmr      Binl-novec r3 rc=0 op=3.173    total=6.776    wall=7.18    load=0.87 DIFFERENT
+dmr      clang-Binl r3 rc=0 op=3.313    total=6.803    wall=7.21    load=0.96 DIFFERENT
+# h5cmp level 7: Binl-novec-1 vs Binl-noloopvec-1
+# h5cmp level 7: Binl-1 vs Binl-noloopvec-1
+mesh/fields/pressure max abs diff 1.284377049159957e-09 max abs value 533.6716955141351
+mesh/fields/rho max abs diff 1.1595346904869075e-10 max abs value 21.220193387531904
+mesh/fields/velocity_0 max abs diff 1.9321433342156524e-11 max abs value 16.79755920579343
+mesh/fields/velocity_1 max abs diff 1.180588959925899e-11 max abs value 4.2315813821108375
+ 19:09:13 up 5 days, 9 min,  0 users,  load average: 0.97, 0.64, 0.60
+# DMR level 3-8
+dmr      Binl       r1 rc=0 op=29.467   total=47.759   wall=48.17   load=0.97 reference
+dmr      Binl-noloopvec r1 rc=0 op=19.317   total=39.784   wall=40.19   load=0.99 DIFFERENT
+dmr      Binl-novec r1 rc=0 op=18.931   total=38.046   wall=38.45   load=0.99 DIFFERENT
+dmr      clang-Binl r1 rc=0 op=20.515   total=39.168   wall=39.58   load=1.16 DIFFERENT
+dmr      Binl       r2 rc=0 op=29.204   total=47.556   wall=47.96   load=1.27 identical
+dmr      Binl-noloopvec r2 rc=0 op=18.566   total=38.247   wall=38.66   load=1.11 DIFFERENT
+dmr      Binl-novec r2 rc=0 op=18.712   total=37.421   wall=37.83   load=1.06 DIFFERENT
+dmr      clang-Binl r2 rc=0 op=20.398   total=38.859   wall=39.27   load=1.03 DIFFERENT
+dmr      Binl       r3 rc=0 op=28.905   total=46.849   wall=47.26   load=1.14 identical
+dmr      Binl-noloopvec r3 rc=0 op=19.381   total=40.503   wall=40.91   load=1.11 DIFFERENT
+dmr      Binl-novec r3 rc=0 op=19.554   total=39.515   wall=39.92   load=1.05 DIFFERENT
+dmr      clang-Binl r3 rc=0 op=21.408   total=41.009   wall=41.42   load=1.03 DIFFERENT
+# h5cmp level 8: Binl-1 vs Binl-noloopvec-1
+mesh/fields/pressure max abs diff 0.00038230699772157095 max abs value 585.6871964826904
+mesh/fields/rho max abs diff 0.00012955495653343974 max abs value 22.95254647899229
+mesh/fields/velocity_0 max abs diff 2.4961454547778317e-06 max abs value 17.95637496899868
+mesh/fields/velocity_1 max abs diff 2.4548355039843983e-06 max abs value 4.2313189674272165
+# h5cmp level 8: Binl-1 vs Binl-novec-1
+mesh/fields/pressure max abs diff 0.00038230699772157095 max abs value 585.6871964826904
+mesh/fields/rho max abs diff 0.00012955495653343974 max abs value 22.95254647899229
+mesh/fields/velocity_0 max abs diff 2.4961454547778317e-06 max abs value 17.95637496899868
+mesh/fields/velocity_1 max abs diff 2.4548355039843983e-06 max abs value 4.2313189674272165
+ 19:17:38 up 5 days, 17 min,  0 users,  load average: 1.01, 1.00, 0.82
+# flux call count, level 3-7, build-Binl-count (-DEXP_COUNT_FLUX)
+muscl flux calls: 90768378
