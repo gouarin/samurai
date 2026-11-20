@@ -50,11 +50,23 @@ point_t analytic_map(double s, double t)
 {
     const double rho = std::max(std::abs(s), std::abs(t));
     const double r   = std::sqrt(s * s + t * t);
+    if (r == 0)
+    {
+        return {0., 0.};
+    }
     return {rho * s / r, rho * t / r};
 }
 
+// Velocity field, chosen once in main: the rigid rotation of the annulus
+// case, or the constant velocity (1, 1) of the disc case.
+static bool diagonal_flow = false;
+
 point_t velocity(const point_t& x)
 {
+    if (diagonal_flow)
+    {
+        return {1., 1.};
+    }
     return {-x[1], x[0]};
 }
 
@@ -81,13 +93,16 @@ struct Box
 
 // Piecewise bilinear map of the parametric grid of a given level onto the
 // annulus. Vertex (i, j) is the parametric point (-2 + i h, -2 + j h) and
-// the hole (-1, 1)^2 is [N / 4, 3 N / 4]^2 in indices.
+// the hole (-1, 1)^2 is [N / 4, 3 N / 4]^2 in indices. Without the hole, the
+// parametric domain is the whole square and the map sends it onto the disc
+// of radius 2.
 class PolysquareMap
 {
   public:
 
-    PolysquareMap(std::size_t level, double h)
+    PolysquareMap(std::size_t level, double h, bool hole)
         : m_level(level)
+        , m_hole(hole)
         , m_h(h)
         , m_n(std::lround(4. / h))
         , m_x(static_cast<std::size_t>((m_n + 1) * (m_n + 1)), point_t{std::nan(""), std::nan("")})
@@ -98,9 +113,9 @@ class PolysquareMap
         }
     }
 
-    static PolysquareMap analytic(std::size_t level, double h)
+    static PolysquareMap analytic(std::size_t level, double h, bool hole)
     {
-        PolysquareMap map(level, h);
+        PolysquareMap map(level, h, hole);
         for (long j = 0; j <= map.m_n; ++j)
         {
             for (long i = 0; i <= map.m_n; ++i)
@@ -118,7 +133,7 @@ class PolysquareMap
     // the new boundary vertices are pushed back onto their circle.
     PolysquareMap refined() const
     {
-        PolysquareMap fine(m_level + 1, 0.5 * m_h);
+        PolysquareMap fine(m_level + 1, 0.5 * m_h, m_hole);
         for (long j = 0; j <= fine.m_n; ++j)
         {
             for (long i = 0; i <= fine.m_n; ++i)
@@ -191,14 +206,14 @@ class PolysquareMap
     {
         const long a = m_n / 4;
         const long b = 3 * m_n / 4;
-        return i >= 0 && i <= m_n && j >= 0 && j <= m_n && !(i > a && i < b && j > a && j < b);
+        return i >= 0 && i <= m_n && j >= 0 && j <= m_n && !(m_hole && i > a && i < b && j > a && j < b);
     }
 
     bool quad_in_domain(long i, long j) const
     {
         const long a = m_n / 4;
         const long b = 3 * m_n / 4;
-        return i >= 0 && i < m_n && j >= 0 && j < m_n && !(i >= a && i < b && j >= a && j < b);
+        return i >= 0 && i < m_n && j >= 0 && j < m_n && !(m_hole && i >= a && i < b && j >= a && j < b);
     }
 
     // Radius of the circle carrying a boundary vertex, 0 inside the domain
@@ -210,14 +225,14 @@ class PolysquareMap
         }
         const long a = m_n / 4;
         const long b = 3 * m_n / 4;
-        if (i >= a && i <= b && j >= a && j <= b)
+        if (m_hole && i >= a && i <= b && j >= a && j <= b)
         {
             return 1.;
         }
         return 0.;
     }
 
-    // The 8 corners of the polysquare stay at their analytic position
+    // The corners of the polysquare stay at their analytic position
     bool is_corner(long i, long j) const
     {
         auto extreme = [this](long k)
@@ -228,7 +243,7 @@ class PolysquareMap
         {
             return k == m_n / 4 || k == 3 * m_n / 4;
         };
-        return (extreme(i) && extreme(j)) || (inner(i) && inner(j));
+        return (extreme(i) && extreme(j)) || (m_hole && inner(i) && inner(j));
     }
 
     point_t operator()(double s, double t) const
@@ -284,7 +299,7 @@ class PolysquareMap
         };
         for (int iter = 0; iter < 4; ++iter)
         {
-            const bool in_hole = box.i0 >= a && box.i0 + box.n <= b && box.j0 >= a && box.j0 + box.n <= b;
+            const bool in_hole = m_hole && box.i0 >= a && box.i0 + box.n <= b && box.j0 >= a && box.j0 + box.n <= b;
             if (box.i0 < 0 || box.i0 >= m_n || box.j0 < 0 || box.j0 >= m_n)
             {
                 for (long* i0 : {&box.i0, &box.j0})
@@ -356,6 +371,8 @@ class PolysquareMap
   private:
 
     std::size_t m_level;
+
+    bool m_hole;
     double m_h;
     long m_n;
     std::vector<point_t> m_x;
@@ -704,14 +721,14 @@ MapQuality map_quality(const PolysquareMap& map)
 // Analytic map on the grid of the given level, optionally optimized level by
 // level from a coarse grid: each level starts from the optimized map of the
 // previous one, so that the fine levels only need a local smoothing.
-PolysquareMap build_map(std::size_t level, double h, bool optimize, double theta, std::size_t max_iterations)
+PolysquareMap build_map(std::size_t level, double h, bool hole, bool optimize, double theta, std::size_t max_iterations)
 {
     if (!optimize)
     {
-        return PolysquareMap::analytic(level, h);
+        return PolysquareMap::analytic(level, h, hole);
     }
     const std::size_t start = std::min(level, std::size_t{2});
-    auto map                = PolysquareMap::analytic(start, h * static_cast<double>(std::size_t{1} << (level - start)));
+    auto map                = PolysquareMap::analytic(start, h * static_cast<double>(std::size_t{1} << (level - start)), hole);
     while (true)
     {
         MapEnergy energy(map, theta);
@@ -1701,6 +1718,8 @@ int main(int argc, char* argv[])
     auto& app = samurai::initialize("Linear advection on a polysquare mapped onto an annulus", argc, argv);
 
     double Tf                  = std::numbers::pi / 2;
+    bool disc                  = false;
+    bool indicator             = false;
     double cfl                 = 0.9;
     bool mr                    = true;
     bool bump                  = true;
@@ -1723,7 +1742,13 @@ int main(int argc, char* argv[])
     fs::path path        = fs::current_path();
     std::string filename = "mapped_advection_annulus";
 
-    app.add_option("--Tf", Tf, "Final time")->capture_default_str()->group("Simulation parameters");
+    auto* Tf_option = app.add_option("--Tf", Tf, "Final time (pi / 2, or sqrt(2) with --disc)")->group("Simulation parameters");
+    app.add_flag("--disc", disc, "Second case: the square mapped onto the disc of radius 2, with the constant velocity (1, 1) along a diagonal")
+        ->capture_default_str()
+        ->group("Simulation parameters");
+    app.add_flag("--indicator", indicator, "Initial condition: indicator of a disc of radius 0.3 instead of the Gaussian bump")
+        ->capture_default_str()
+        ->group("Simulation parameters");
     app.add_option("--cfl", cfl, "The CFL")->capture_default_str()->group("Simulation parameters");
     app.add_flag("--mr,!--no-mr", mr, "Adapt the mesh with multiresolution")->capture_default_str()->group("Simulation parameters");
     app.add_flag("--bump,!--constant", bump, "Initial condition: Gaussian bump or constant state")
@@ -1767,8 +1792,19 @@ int main(int argc, char* argv[])
     app.allow_extras();
     SAMURAI_PARSE(argc, argv);
 
+    // In the disc case, the bump starts at distance 1 from the center on the
+    // diagonal, crosses the center and stops at distance 1 on the other side.
+    diagonal_flow = disc;
+    if (disc && Tf_option->count() == 0)
+    {
+        Tf = std::numbers::sqrt2;
+    }
+
     samurai::DomainBuilder<dim> domain({-2., -2.}, {2., 2.});
-    domain.remove({-1., -1.}, {1., 1.});
+    if (!disc)
+    {
+        domain.remove({-1., -1.}, {1., 1.});
+    }
 
     auto config = samurai::mesh_config<dim>().min_level(min_level).max_level(max_level).max_stencil_size(order == 2 ? 4 : 2);
     auto mesh   = samurai::mra::make_mesh(domain, config);
@@ -1776,7 +1812,7 @@ int main(int argc, char* argv[])
     // --min-level and --max-level override the values above
     min_level      = mesh.min_level();
     max_level      = mesh.max_level();
-    const auto map = build_map(max_level, mesh.cell_length(max_level), optimize_map, theta, map_iterations);
+    const auto map = build_map(max_level, mesh.cell_length(max_level), !disc, optimize_map, theta, map_iterations);
     const auto mq  = map_quality(map);
     fmt::print(
         "map ({}): largest angle = {:.2f} deg, det J in [{:.3f}, {:.3f}], singular values in [{:.3f}, {:.3f}], largest aspect = {:.2f}\n",
@@ -1795,14 +1831,18 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    auto u0 = [bump, base](const point_t& x)
+    auto u0 = [bump, base, disc, indicator](const point_t& x)
     {
         if (!bump)
         {
             return 1.;
         }
-        const double dx = x[0] - 1.5;
-        const double dy = x[1];
+        const double dx = x[0] - (disc ? -std::numbers::sqrt2 / 2 : 1.5);
+        const double dy = x[1] - (disc ? -std::numbers::sqrt2 / 2 : 0.);
+        if (indicator)
+        {
+            return base + (dx * dx + dy * dy < 0.09 ? 1. : 0.);
+        }
         return base + std::exp(-(dx * dx + dy * dy) / 0.02);
     };
 
@@ -1884,6 +1924,10 @@ int main(int argc, char* argv[])
     {
         return [&, t](const point_t& x)
         {
+            if (disc)
+            {
+                return u0({x[0] - t, x[1] - t});
+            }
             const double c = std::cos(t);
             const double s = std::sin(t);
             return u0({c * x[0] + s * x[1], -s * x[0] + c * x[1]});
