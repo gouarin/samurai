@@ -971,6 +971,33 @@ double prediction_weight(std::size_t parity, std::size_t s)
     return parity == 0 ? even[s] : odd[s];
 }
 
+// Fills the levels below the finest one, of n x n cells, with the mean of
+// the four children of each cell
+void fill_coarser_levels(std::vector<std::vector<double>>& levels, long n)
+{
+    const std::size_t finest = levels.size() - 1;
+    for (std::size_t level = finest; level-- > 0;)
+    {
+        const long nc      = n >> (finest - level);
+        const auto& finer  = levels[level + 1];
+        auto& coarse       = levels[level];
+        const auto at_fine = [&](long i, long j)
+        {
+            return finer[static_cast<std::size_t>(j * 2 * nc + i)];
+        };
+        coarse.resize(static_cast<std::size_t>(nc * nc));
+        for (long j = 0; j < nc; ++j)
+        {
+            for (long i = 0; i < nc; ++i)
+            {
+                coarse[static_cast<std::size_t>(j * nc + i)] = 0.25
+                                                             * (at_fine(2 * i, 2 * j) + at_fine(2 * i + 1, 2 * j)
+                                                                + at_fine(2 * i, 2 * j + 1) + at_fine(2 * i + 1, 2 * j + 1));
+            }
+        }
+    }
+}
+
 // Mean Jacobians |K| / h^2 of the cells of every level, computed once from
 // the areas of the quads of the geometry grid. The areas are nested, so the
 // Jacobian of a cell is the mean of the Jacobians of its children.
@@ -995,26 +1022,7 @@ class JacobianPyramid
                 }
             }
         }
-        for (std::size_t level = map.level(); level-- > 0;)
-        {
-            const long nc      = n >> (map.level() - level);
-            const auto& finer  = m_levels[level + 1];
-            auto& coarse       = m_levels[level];
-            const auto at_fine = [&](long i, long j)
-            {
-                return finer[static_cast<std::size_t>(j * 2 * nc + i)];
-            };
-            coarse.resize(static_cast<std::size_t>(nc * nc));
-            for (long j = 0; j < nc; ++j)
-            {
-                for (long i = 0; i < nc; ++i)
-                {
-                    coarse[static_cast<std::size_t>(j * nc + i)] = 0.25
-                                                                 * (at_fine(2 * i, 2 * j) + at_fine(2 * i + 1, 2 * j)
-                                                                    + at_fine(2 * i, 2 * j + 1) + at_fine(2 * i + 1, 2 * j + 1));
-                }
-            }
-        }
+        fill_coarser_levels(m_levels, n);
     }
 
     // Mean Jacobian of the cell (i, j) of 'level'. A cell outside the domain
@@ -1367,6 +1375,159 @@ class WellBalancedAdapt
     samurai::ScalarField<mesh_t, std::uint8_t> m_tag;
 };
 
+// Decay of the details of a smooth function with the level, for the four
+// predictions of the prototype. No mesh nor time stepping is involved: q is
+// the exact mean of u J on the quads of the geometry grid (3 x 3 Gauss
+// points per quad), then the mean of its children on the coarser levels.
+// All the details are in the units of u:
+//   - "q":             (q - P(q)) / J, standard prediction of q;
+//   - "u":             u - P(u) with u = q / J, as --detail-on-u;
+//   - "mapped":        (q - q_hat) / J with the prediction of
+//                      mapped_prediction_fn, which transfers q with --detail-on-u;
+//   - "well-balanced": (q - P(q) - u_parent dJ) / J, as --well-balanced.
+// Only the cells whose 3 x 3 stencil lies in the domain are measured. The
+// second maximum leaves out the neighbourhood of the diagonals of the
+// parametric domain, where the map is singular.
+void print_detail_decay(const PolysquareMap& map)
+{
+    auto u_smooth = [](const point_t& x)
+    {
+        return 1. + 0.5 * std::sin(2. * x[0] + 0.3) * std::cos(1.5 * x[1] - 0.2);
+    };
+
+    const JacobianPyramid jacobian(map);
+    const long n = map.size();
+    std::vector<std::vector<double>> q(map.level() + 1);
+    q.back().assign(static_cast<std::size_t>(n * n), 0.);
+    const double sq = std::sqrt(0.6);
+    const std::array<double, 3> gauss_points{0.5 * (1 - sq), 0.5, 0.5 * (1 + sq)};
+    const std::array<double, 3> gauss_weights{5. / 18, 8. / 18, 5. / 18};
+    for (long j = 0; j < n; ++j)
+    {
+        for (long i = 0; i < n; ++i)
+        {
+            if (!map.quad_in_domain(i, j))
+            {
+                continue;
+            }
+            const auto& a   = map.vertex(i, j);
+            const auto& b   = map.vertex(i + 1, j);
+            const auto& c   = map.vertex(i + 1, j + 1);
+            const auto& d   = map.vertex(i, j + 1);
+            double integral = 0;
+            for (std::size_t ks = 0; ks < 3; ++ks)
+            {
+                for (std::size_t kt = 0; kt < 3; ++kt)
+                {
+                    const double s = gauss_points[ks];
+                    const double t = gauss_points[kt];
+                    const point_t x{(1 - s) * (1 - t) * a[0] + s * (1 - t) * b[0] + s * t * c[0] + (1 - s) * t * d[0],
+                                    (1 - s) * (1 - t) * a[1] + s * (1 - t) * b[1] + s * t * c[1] + (1 - s) * t * d[1]};
+                    const point_t dxds{(1 - t) * (b[0] - a[0]) + t * (c[0] - d[0]), (1 - t) * (b[1] - a[1]) + t * (c[1] - d[1])};
+                    const point_t dxdt{(1 - s) * (d[0] - a[0]) + s * (c[0] - b[0]), (1 - s) * (d[1] - a[1]) + s * (c[1] - b[1])};
+                    integral += gauss_weights[ks] * gauss_weights[kt] * u_smooth(x) * cross(dxds, dxdt);
+                }
+            }
+            q.back()[static_cast<std::size_t>(j * n + i)] = integral / (map.step() * map.step());
+        }
+    }
+    fill_coarser_levels(q, n);
+
+    static constexpr std::size_t n_methods = 4;
+    fmt::print("detail decay of a smooth u: level of the children, then for each of [q, u, mapped, well-balanced]\n");
+    fmt::print("the maximum, the maximum away from the diagonals and the mean of |detail|\n");
+    for (std::size_t level = 2; level < map.level(); ++level)
+    {
+        const long nl  = n >> (map.level() - level);
+        const double h = 4. / static_cast<double>(nl);
+        auto q_at      = [&](std::size_t l, long i, long j)
+        {
+            return q[l][static_cast<std::size_t>(j * (n >> (map.level() - l)) + i)];
+        };
+        std::array<double, n_methods> max_all{};
+        std::array<double, n_methods> max_away{};
+        std::array<double, n_methods> sum{};
+        std::size_t count = 0;
+        for (long j = 0; j < nl; ++j)
+        {
+            for (long i = 0; i < nl; ++i)
+            {
+                bool full_stencil = true;
+                for (long b = -1; b <= 1; ++b)
+                {
+                    for (long a = -1; a <= 1; ++a)
+                    {
+                        full_stencil = full_stencil && jacobian.in_domain(level, i + a, j + b);
+                    }
+                }
+                if (!full_stencil)
+                {
+                    continue;
+                }
+                const double xi   = -2. + (static_cast<double>(i) + 0.5) * h;
+                const double eta  = -2. + (static_cast<double>(j) + 0.5) * h;
+                const bool away   = std::abs(std::abs(xi) - std::abs(eta)) > 0.25;
+                const double q_p  = q_at(level, i, j);
+                const double u_p  = q_p / jacobian(level, i, j);
+                double mean_q_hat = 0;
+                std::array<std::array<double, 2>, 2> q_hat_mapped;
+                std::array<std::array<std::array<double, n_methods>, 2>, 2> detail;
+                for (std::size_t dx = 0; dx < 2; ++dx)
+                {
+                    for (std::size_t dy = 0; dy < 2; ++dy)
+                    {
+                        double p_q = 0;
+                        double p_u = 0;
+                        for (std::size_t a = 0; a < 3; ++a)
+                        {
+                            for (std::size_t b = 0; b < 3; ++b)
+                            {
+                                const long ia  = i + static_cast<long>(a) - 1;
+                                const long jb  = j + static_cast<long>(b) - 1;
+                                const double w = prediction_weight(dx, a) * prediction_weight(dy, b);
+                                p_q += w * q_at(level, ia, jb);
+                                p_u += w * q_at(level, ia, jb) / jacobian(level, ia, jb);
+                            }
+                        }
+                        const long ic        = 2 * i + static_cast<long>(dx);
+                        const long jc        = 2 * j + static_cast<long>(dy);
+                        const double q_c     = q_at(level + 1, ic, jc);
+                        const double j_c     = jacobian(level + 1, ic, jc);
+                        detail[dx][dy][0]    = (q_c - p_q) / j_c;
+                        detail[dx][dy][1]    = q_c / j_c - p_u;
+                        detail[dx][dy][2]    = q_c / j_c - p_u; // completed below by the conservative correction
+                        detail[dx][dy][3]    = (q_c - p_q - u_p * jacobian.detail(level, i, j, dx, dy)) / j_c;
+                        q_hat_mapped[dx][dy] = j_c * p_u;
+                        mean_q_hat += 0.25 * q_hat_mapped[dx][dy];
+                    }
+                }
+                for (std::size_t dx = 0; dx < 2; ++dx)
+                {
+                    for (std::size_t dy = 0; dy < 2; ++dy)
+                    {
+                        detail[dx][dy][2] -= (q_p - mean_q_hat)
+                                           / jacobian(level + 1, 2 * i + static_cast<long>(dx), 2 * j + static_cast<long>(dy));
+                        for (std::size_t m = 0; m < n_methods; ++m)
+                        {
+                            const double d = std::abs(detail[dx][dy][m]);
+                            max_all[m]     = std::max(max_all[m], d);
+                            max_away[m]    = away ? std::max(max_away[m], d) : max_away[m];
+                            sum[m] += d;
+                        }
+                        ++count;
+                    }
+                }
+            }
+        }
+        fmt::print("{:2}", level + 1);
+        for (std::size_t m = 0; m < n_methods; ++m)
+        {
+            fmt::print("  | {:.3e} {:.3e} {:.3e}", max_all[m], max_away[m], sum[m] / static_cast<double>(count));
+        }
+        fmt::print("\n");
+    }
+}
+
 template <class Field, class Exact>
 Diagnostics compute_diagnostics(const Field& q, const PolysquareMap& map, Exact&& exact)
 {
@@ -1500,6 +1661,7 @@ int main(int argc, char* argv[])
     std::size_t nfiles         = 0;
     bool on_u                  = false;
     bool well_balanced         = false;
+    bool detail_decay          = false;
     double base                = 0;
     bool mapped                = true;
     bool u_source              = false;
@@ -1532,6 +1694,9 @@ int main(int argc, char* argv[])
     app.add_flag("--well-balanced",
                  well_balanced,
                  "Compute the details on q with the well-balanced prediction, which removes the detail of the Jacobian")
+        ->capture_default_str()
+        ->group("Simulation parameters");
+    app.add_flag("--detail-decay", detail_decay, "Print the decay of the details of a smooth function with the level, then stop")
         ->capture_default_str()
         ->group("Simulation parameters");
     app.add_flag("--optimized-map,!--analytic-map", optimize_map, "Minimize Garanzha's energy of the map, starting from the analytic one")
@@ -1567,6 +1732,13 @@ int main(int argc, char* argv[])
         mq.min_sigma,
         mq.max_sigma,
         mq.max_aspect);
+
+    if (detail_decay)
+    {
+        print_detail_decay(map);
+        samurai::finalize();
+        return 0;
+    }
 
     auto u0 = [bump, base](const point_t& x)
     {
