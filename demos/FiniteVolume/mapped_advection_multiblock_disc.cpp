@@ -17,10 +17,11 @@
 //   - the flux through a seam face reads the cell of the neighbouring block
 //     directly, without any ghost. Both blocks then compute the same flux
 //     and the scheme stays conservative;
-//   - the cells along the seams are kept at the finest level, so that the
-//     two sides of a seam always match;
-//   - the prediction of the multiresolution reads across the seams when the
-//     neighbouring cell exists.
+//   - across a seam, the two blocks may be at different levels: the flux is
+//     then computed half face by half face;
+//   - the adaptation grades the mesh across the seams, so that these levels
+//     differ by one at most;
+//   - the prediction of the multiresolution reads across the seams.
 // Three blocks meet at each corner of the central block: these four
 // vertices of valence 3 are the only singular points of the grid.
 //
@@ -322,14 +323,14 @@ Box cell_box(const MultiblockMap& map, const Cell& cell)
     return {cell.indices[0] * s, cell.indices[1] * s, s};
 }
 
-// Physical flux of the velocity through the face on the low side of 'cell'
-// in direction d, oriented towards +d, summed over the segments of the
-// geometry grid.
-template <class Cell>
-double face_flux(const MultiblockMap& map, const Cell& cell, std::size_t d)
+// Physical flux of the velocity through the face on the low side of the cell
+// 'cell' of 'level' in direction d, oriented towards +d, summed over the
+// segments of the geometry grid.
+inline double face_flux(const MultiblockMap& map, std::size_t level, Index cell, std::size_t d)
 {
-    const auto box = cell_box(map, cell);
-    double flux    = 0;
+    const long s = 1L << (map.level() - level);
+    const Box box{cell.i * s, cell.j * s, s};
+    double flux = 0;
     for (long k = 0; k < box.n; ++k)
     {
         // the normal on the right of a -> b points towards +d
@@ -459,10 +460,36 @@ std::optional<std::size_t> find_cell(const Mesh& mesh, std::size_t level, long i
     return static_cast<std::size_t>(lca[0][static_cast<std::size_t>(k)].index + i);
 }
 
+// Storage index of a leaf cell, if the mesh has it
+template <class Mesh>
+std::optional<std::size_t> find_leaf(const Mesh& mesh, std::size_t level, long i, long j)
+{
+    using mesh_id_t = typename Mesh::mesh_id_t;
+    using value_t   = typename Mesh::interval_t::coord_index_t;
+    const auto& lca = mesh[mesh_id_t::cells][level];
+    const xt::xtensor_fixed<value_t, xt::xshape<dim>> coord{static_cast<value_t>(i), static_cast<value_t>(j)};
+    const auto k = samurai::find(lca, coord);
+    if (k < 0)
+    {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(lca[0][static_cast<std::size_t>(k)].index + i);
+}
+
 // The scheme takes u and returns d(q)/dt: the physical flux times the
-// upwind value. When the upwind cell is not in the cross, it is a ghost:
-// the value is read in the cell that plays its role, across a seam or
-// mirrored at the circle.
+// upwind value.
+//
+// A face with a cell outside the cross is on a seam or on the circle.
+// samurai sees it as a boundary face and gives a ghost on the other side;
+// the scheme ignores it and reads the leaf that really lies there
+// (Cross::resolve): the cell of the neighbouring block across a seam, the
+// cell itself at the circle. Across a seam, that leaf may be at the same
+// level, one level coarser, or the face may be shared with two leaves one
+// level finer. In the last case the flux is the sum over the two half
+// faces, each with its own upwind value. Every half face then gets the same
+// flux from both blocks, whatever their levels: the scheme is conservative
+// across the seams without any ghost. MultiblockAdapt keeps the levels of
+// the two sides within one of each other.
 template <class Field>
 auto make_mapped_upwind(const MultiblockMap& map, const Field& u)
 {
@@ -477,28 +504,78 @@ auto make_mapped_upwind(const MultiblockMap& map, const Field& u)
             upwind[d].cons_flux_function =
                 [&map, &u](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& data, const samurai::StencilValues<cfg>& u_stencil)
             {
-                const double F         = face_flux(map, data.cells[1], d);
-                const std::size_t side = (F >= 0) ? 0 : 1;
-                double value           = u_stencil[side];
-
-                const auto& cell = data.cells[side];
-                const Cross shape{map.cross_shape().n >> (map.level() - cell.level)};
-                const auto target = cell_index(cell);
-                if (!shape.contains(target.i, target.j))
-                {
-                    const auto source = shape.resolve(cell_index(data.cells[1 - side]), target);
-                    if (source)
-                    {
-                        if (const auto index = find_cell(u.mesh(), cell.level, source->i, source->j))
-                        {
-                            value = u[*index];
-                        }
-                    }
-                }
+                const std::size_t level = data.cells[1].level;
+                const Index left        = cell_index(data.cells[0]);
+                const Index right       = cell_index(data.cells[1]);
+                const Cross shape{map.cross_shape().n >> (map.level() - level)};
+                const bool left_in  = shape.contains(left.i, left.j);
+                const bool right_in = shape.contains(right.i, right.j);
 
                 // The scheme multiplies by h_face / h_cell^2: divide by h_face
                 // to get d(q)/dt = -sum(F u) / h_cell^2.
-                flux = F * value / data.cell_length;
+                if (left_in && right_in)
+                {
+                    const double F = face_flux(map, level, right, d);
+                    flux           = F * ((F >= 0) ? u_stencil[0] : u_stencil[1]) / data.cell_length;
+                    return;
+                }
+
+                const double u_inside = u_stencil[left_in ? 0 : 1];
+                const auto& mesh      = u.mesh();
+                auto leaf_value       = [&](std::size_t l, const Index& cell) -> std::optional<double>
+                {
+                    if (const auto index = find_leaf(mesh, l, cell.i, cell.j))
+                    {
+                        return u[*index];
+                    }
+                    return std::nullopt;
+                };
+                // flux through the face of level l on the low side of l_right
+                auto seam_flux = [&](std::size_t l, const Index& l_right, double u_outside)
+                {
+                    const double F         = face_flux(map, l, l_right, d);
+                    const bool from_inside = (F >= 0) == left_in;
+                    return F * (from_inside ? u_inside : u_outside);
+                };
+
+                const Index inside  = left_in ? left : right;
+                const Index outside = left_in ? right : left;
+                const auto source   = shape.resolve(inside, outside);
+                if (!source)
+                {
+                    throw std::runtime_error("a face of the central block has no cell on one side");
+                }
+                auto other = leaf_value(level, *source);
+                if (!other && level > 0)
+                {
+                    other = leaf_value(level - 1, {source->i >> 1, source->j >> 1});
+                }
+                if (other)
+                {
+                    flux = seam_flux(level, right, *other) / data.cell_length;
+                    return;
+                }
+
+                // The other side is finer: one flux per half face
+                if (level == map.level())
+                {
+                    throw std::runtime_error("no leaf across a seam at the finest level");
+                }
+                const Cross fine_shape{2 * shape.n};
+                double total = 0;
+                for (long k = 0; k < 2; ++k)
+                {
+                    const Index fine_right{2 * right.i + (d == 0 ? 0 : k), 2 * right.j + (d == 0 ? k : 0)};
+                    const Index fine_left{fine_right.i - (d == 0 ? 1 : 0), fine_right.j - (d == 0 ? 0 : 1)};
+                    const auto fine_source = fine_shape.resolve(left_in ? fine_left : fine_right, left_in ? fine_right : fine_left);
+                    const auto fine_other  = leaf_value(level + 1, *fine_source);
+                    if (!fine_other)
+                    {
+                        throw std::runtime_error("the levels of the two sides of a seam differ by more than one");
+                    }
+                    total += seam_flux(level + 1, fine_right, *fine_other);
+                }
+                flux = total / data.cell_length;
             };
         });
     return samurai::make_flux_based_scheme(upwind);
@@ -521,9 +598,10 @@ struct Stencil
 };
 
 // A neighbour outside the cross is replaced by the cell that plays its role
-// (Cross::resolve). When there is none, or when the mesh does not have it,
-// the neighbour takes the q and the Jacobian of the central cell, that is
-// the same u.
+// (Cross::resolve). When the mesh does not have it at this level, the
+// block across the seam is coarser there: the neighbour takes the u of the
+// parent of that cell. When there is no such cell at all, it takes the u of
+// the central cell.
 template <class Field>
 Stencil gather(const Field& q, const JacobianPyramid& jacobian, std::size_t level, long i, long j)
 {
@@ -543,6 +621,15 @@ Stencil gather(const Field& q, const JacobianPyramid& jacobian, std::size_t leve
                 {
                     stencil.q[a][b]        = q[*index];
                     stencil.jacobian[a][b] = jacobian(level, source->i, source->j);
+                }
+                else if (level > 0)
+                {
+                    const Index parent{source->i >> 1, source->j >> 1};
+                    if (const auto parent_index = find_cell(q.mesh(), level - 1, parent.i, parent.j))
+                    {
+                        stencil.jacobian[a][b] = jacobian(level, source->i, source->j);
+                        stencil.q[a][b]        = stencil.jacobian[a][b] * q[*parent_index] / jacobian(level - 1, parent.i, parent.j);
+                    }
                 }
             }
         }
@@ -661,7 +748,7 @@ void predict_ghosts_well_balanced(Field& q, const JacobianPyramid& jacobian)
 // Multiresolution adaptation of q with the well-balanced prediction. It
 // follows samurai::Adapt step by step. Three things differ: the predicted
 // ghosts of q are well-balanced, the detail is d = (q - q_hat) / J, in the
-// units of u, and the cells along the seams stay at the finest level.
+// units of u, and the mesh is also graded across the seams.
 template <class Field>
 class MultiblockAdapt
 {
@@ -748,18 +835,6 @@ class MultiblockAdapt
             samurai::update_tag_subdomains(level, m_tag, true);
         }
 
-        // The cells along the seams stay at the finest level: the flux
-        // through a seam reads the cell of the other block at the same level.
-        const auto shape = m_jacobian.cross_shape(max_level);
-        samurai::for_each_cell(mesh[mesh_id_t::cells][max_level],
-                               [&](const auto& cell)
-                               {
-                                   if (shape.on_seam(cell.indices[0], cell.indices[1]))
-                                   {
-                                       m_tag[cell] = static_cast<std::uint8_t>(samurai::CellFlag::keep);
-                                   }
-                               });
-
         for (std::size_t level = max_level; level > 0; --level)
         {
             auto keep_subset = samurai::intersection(mesh[mesh_id_t::cells][level], mesh[mesh_id_t::all_cells][level - 1]).on(level - 1);
@@ -768,13 +843,29 @@ class MultiblockAdapt
             keep_subset.apply_op(samurai::maximum(m_tag));
         }
 
+        // samurai grades the mesh inside the cross. The two sides of a seam
+        // are graded here: while a leaf has, across a seam, a leaf coarser
+        // by more than one level, that leaf is refined or kept from
+        // coarsening, and the mesh is graded again.
         auto new_ca = samurai::update_cell_array_from_tag(mesh[mesh_id_t::cells], m_tag);
-        samurai::make_graduation(new_ca,
-                                 mesh.domain_pyramid(),
-                                 mesh.mpi_neighbourhood(),
-                                 mesh.periodicity(),
-                                 mesh.graduation_width(),
-                                 mesh.max_stencil_radius());
+        for (std::size_t pass = 0;; ++pass)
+        {
+            samurai::make_graduation(new_ca,
+                                     mesh.domain_pyramid(),
+                                     mesh.mpi_neighbourhood(),
+                                     mesh.periodicity(),
+                                     mesh.graduation_width(),
+                                     mesh.max_stencil_radius());
+            if (!grade_seams(new_ca))
+            {
+                break;
+            }
+            if (pass == 2 * max_level)
+            {
+                throw std::runtime_error("the graduation across the seams does not converge");
+            }
+            new_ca = samurai::update_cell_array_from_tag(mesh[mesh_id_t::cells], m_tag);
+        }
         if (mesh[mesh_id_t::cells] == new_ca)
         {
             return true;
@@ -784,6 +875,91 @@ class MultiblockAdapt
         samurai::update_fields(well_balanced_prediction_fn(m_jacobian), new_mesh, m_q);
         mesh.swap(new_mesh);
         return false;
+    }
+
+    // Looks for leaves of 'ca' that are more than one level coarser than a
+    // leaf across a seam, and changes the tags of the current mesh so that
+    // they come out one level finer. Returns whether a tag changed.
+    template <class CellArray>
+    bool grade_seams(const CellArray& ca)
+    {
+        using value_t = typename mesh_t::interval_t::coord_index_t;
+        auto& mesh    = m_q.mesh();
+        auto has_leaf = [](const auto& lca, const Index& cell)
+        {
+            const xt::xtensor_fixed<value_t, xt::xshape<dim>> coord{static_cast<value_t>(cell.i), static_cast<value_t>(cell.j)};
+            return samurai::find(lca, coord) >= 0;
+        };
+        // Tags a leaf of the current mesh. Returns whether it is a leaf.
+        bool changed = false;
+        auto set_tag = [&](std::size_t level, const Index& cell, samurai::CellFlag flag)
+        {
+            const auto index = find_leaf(mesh, level, cell.i, cell.j);
+            if (!index)
+            {
+                return false;
+            }
+            const auto value = static_cast<std::uint8_t>(flag);
+            changed          = changed || m_tag[*index] != value;
+            m_tag[*index]    = value;
+            return true;
+        };
+
+        for (std::size_t level = 2; level <= mesh.max_level(); ++level)
+        {
+            const auto shape = m_jacobian.cross_shape(level);
+            samurai::for_each_cell(ca[level],
+                                   [&](const auto& cell)
+                                   {
+                                       const Index center = cell_index(cell);
+                                       if (!shape.on_seam(center.i, center.j))
+                                       {
+                                           return;
+                                       }
+                                       for (const Index& step : {
+                                                Index{-1, 0 },
+                                                Index{1,  0 },
+                                                Index{0,  -1},
+                                                Index{0,  1 }
+                                       })
+                                       {
+                                           const Index target{center.i + step.i, center.j + step.j};
+                                           const auto source = shape.resolve(center, target);
+                                           if (shape.contains(target.i, target.j) || !source)
+                                           {
+                                               continue;
+                                           }
+                                           // a leaf across the seam, two levels coarser or more
+                                           for (std::size_t coarse_level = level - 2;; --coarse_level)
+                                           {
+                                               const Index coarse{source->i >> (level - coarse_level), source->j >> (level - coarse_level)};
+                                               if (has_leaf(ca[coarse_level], coarse))
+                                               {
+                                                   // it is a leaf of the current mesh: refine it; or it
+                                                   // comes from the coarsening of four leaves: keep them
+                                                   bool found = set_tag(coarse_level, coarse, samurai::CellFlag::refine);
+                                                   for (long child = 0; child < 4; ++child)
+                                                   {
+                                                       found = set_tag(coarse_level + 1,
+                                                                       {2 * coarse.i + (child & 1), 2 * coarse.j + (child >> 1)},
+                                                                       samurai::CellFlag::keep)
+                                                            || found;
+                                                   }
+                                                   if (!found)
+                                                   {
+                                                       throw std::runtime_error("cannot grade the mesh across a seam");
+                                                   }
+                                                   break;
+                                               }
+                                               if (coarse_level == 0)
+                                               {
+                                                   break;
+                                               }
+                                           }
+                                       }
+                                   });
+        }
+        return changed;
     }
 
     Field& m_q;
