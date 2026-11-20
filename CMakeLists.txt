@@ -72,6 +72,10 @@ set(STATIC_MATRIX_CONTAINER_LIST "xtensor" "eigen3")
 set(SAMURAI_STATIC_MAT_CONTAINER "xtensor" CACHE STRING "Container to store static matrices: ${STATIC_MATRIX_CONTAINER_LIST}")
 set_property(CACHE SAMURAI_STATIC_MAT_CONTAINER PROPERTY STRINGS ${STATIC_MATRIX_CONTAINER_LIST})
 
+set(CELL_LIST_CONTAINER_LIST "flat_map" "list_of_intervals")
+set(SAMURAI_CELL_LIST_CONTAINER "flat_map" CACHE STRING "Container to store the rows of a LevelCellList: ${CELL_LIST_CONTAINER_LIST}")
+set_property(CACHE SAMURAI_CELL_LIST_CONTAINER PROPERTY STRINGS ${CELL_LIST_CONTAINER_LIST})
+
 SET(FEATURES)
 
 if(${CLANG_TIDY})
@@ -95,7 +99,7 @@ if(${SANITIZERS})
   LIST(APPEND FEATURES ENABLE_SANITIZER_UNDEFINED)
 endif()
 
-if(${COVERAGE})
+if(${ENABLE_COVERAGE})
   LIST(APPEND FEATURES ENABLE_COVERAGE)
 endif()
 
@@ -312,9 +316,18 @@ else()
     target_compile_definitions(samurai INTERFACE SAMURAI_STATIC_MAT_CONTAINER_${SAMURAI_STATIC_MAT_CONTAINER})
 endif()
 
-# Package the project
+if(NOT SAMURAI_CELL_LIST_CONTAINER IN_LIST CELL_LIST_CONTAINER_LIST)
+    message(FATAL_ERROR "SAMURAI_CELL_LIST_CONTAINER must be one of: ${CELL_LIST_CONTAINER_LIST}")
+else()
+    string(TOUPPER ${SAMURAI_CELL_LIST_CONTAINER} SAMURAI_CELL_LIST_CONTAINER)
+    target_compile_definitions(samurai INTERFACE SAMURAI_CELL_LIST_CONTAINER_${SAMURAI_CELL_LIST_CONTAINER})
+endif()
+
+# Package the project. samurai is header-only, so the installed package does not
+# depend on the pointer size: ARCH_INDEPENDENT lets 32-bit consumers find it.
 package_project(
   TARGETS samurai project_options project_warnings
+  ARCH_INDEPENDENT
   INTERFACE_DEPENDENCIES_CONFIGURED ${DEPENDENCIES_CONFIGURED}
   INTERFACE_INCLUDES ${INCLUDE_DIR}
 )

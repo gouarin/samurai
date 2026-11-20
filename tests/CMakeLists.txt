@@ -35,6 +35,8 @@ set(TEST_TIMERS_HELPERS
 
 set(SAMURAI_TESTS
     test_adapt.cpp
+    test_always_inline.cpp
+    test_arguments.cpp
     test_bc.cpp
     test_bc_ghost_values.cpp
     test_box.cpp
@@ -63,6 +65,7 @@ set(SAMURAI_TESTS
     test_portion.cpp
     test_prediction_cache_threads.cpp
     test_prediction_coefficients.cpp
+    test_prediction_kernel.cpp
     test_projection_prediction_roundtrip.cpp
     test_restart.cpp
     test_restart_include.cpp

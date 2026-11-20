@@ -213,6 +213,13 @@ namespace samurai
                               });
             this->cells()[mesh_id_t::cells_and_ghosts] = {cl, false};
 
+            // Without cells, min_level() is past the last level and the loops below would index it.
+            // The other sub-meshes are then empty as well.
+            if (this->cells()[mesh_id_t::cells].empty())
+            {
+                return;
+            }
+
             auto max_level = this->cells()[mesh_id_t::cells].max_level();
             auto min_level = this->cells()[mesh_id_t::cells].min_level();
 
@@ -241,7 +248,7 @@ namespace samurai
             {
                 auto expr = intersection(difference(this->cells()[mesh_id_t::cells_and_ghosts][level],
                                                     union_(this->get_union()[level], this->cells()[mesh_id_t::cells][level])),
-                                         self(this->domain()).on(level));
+                                         this->domain(level));
 
                 lcl_type lcl{level};
                 expr(
@@ -253,7 +260,11 @@ namespace samurai
                 this->cells()[mesh_id_t::pred_cells][level] = {lcl};
             }
 
-            for (std::size_t level = min_level; level <= max_level; ++level)
+            // The prediction of the cells in pred_cells at a level reads their parents at level - 1, which
+            // this loop adds as ghosts there. pred_cells is built only above min_level, so the loop starts
+            // at min_level + 1: a mesh with cells at level 0 never reaches the coarser level that does
+            // not exist.
+            for (std::size_t level = min_level + 1; level <= max_level; ++level)
             {
                 auto expr = intersection(this->cells()[mesh_id_t::pred_cells][level], this->cells()[mesh_id_t::pred_cells][level]).on(level - 1);
 

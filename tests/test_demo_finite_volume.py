@@ -97,6 +97,67 @@ def test_finite_volume_demo(exec, Tf, config):
     output = subprocess.run(cmd, check=True, capture_output=True)
 
 
+def test_finite_volume_level_set_amr_corners(tmp_path):
+    # --min-corner and --max-corner take one value per dimension: the mesh must
+    # cover exactly the box they describe.
+    cmd = [
+        get_executable(Path("../build/demos/FiniteVolume/"), "finite-volume-level-set-amr"),
+        "--path",
+        str(tmp_path),
+        "--filename",
+        "corners",
+        "--Tf",
+        "0.01",
+        "--min-corner",
+        "-1",
+        "0.5",
+        "--max-corner",
+        "1",
+        "2",
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+    with h5py.File(tmp_path / "corners.h5", "r") as f:
+        points = f["mesh"]["points"][:]
+    assert points[:, 0].min() == pytest.approx(-1)
+    assert points[:, 0].max() == pytest.approx(1)
+    assert points[:, 1].min() == pytest.approx(0.5)
+    assert points[:, 1].max() == pytest.approx(2)
+
+
+@pytest.mark.parametrize("min_level, max_level", [(1, 5), (1, 6)])
+def test_finite_volume_amr_burgers_hat_adaptation_ends(min_level, max_level, tmp_path):
+    # A pass of the mesh adaptation moves a cell by one level at most, so the
+    # adaptation reaches its fixed point within one pass per level, plus the
+    # pass that finds nothing left to change. With these levels it used to
+    # flip between two meshes forever: the demo is stopped as soon as it
+    # exceeds that bound, so that the test fails instead of hanging.
+    max_passes = max_level - min_level + 2
+    cmd = [
+        get_executable(
+            Path("../build/demos/FiniteVolume/"), "finite-volume-amr-burgers-hat"
+        ),
+        "--path",
+        str(tmp_path),
+        "--min-level",
+        str(min_level),
+        "--max-level",
+        str(max_level),
+        "--Tf",
+        "0.6",
+    ]
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True) as process:
+        for line in process.stdout:
+            if line.strip().startswith("mesh adaptation:"):
+                n_passes = int(line.split(":")[1]) + 1
+                if n_passes > max_passes:
+                    process.kill()
+                    pytest.fail(
+                        f"the mesh adaptation did not end after {max_passes} passes"
+                    )
+    assert process.returncode == 0
+
+
 @pytest.mark.h5diff()
 @pytest.mark.parametrize("time_scheme", ["explicit", "implicit"])
 def test_finite_volume_demo_heat(time_scheme, config):
@@ -297,6 +358,32 @@ def test_finite_volume_demo_linear_convection(time_scheme, config):
     if time_scheme == "implicit":
         cmd.append("--implicit")
     output = subprocess.run(cmd, check=True, capture_output=True)
+
+
+# The 3D variants share the source of the 2D demos: check that they run.
+@pytest.mark.parametrize("time_scheme", ["explicit", "implicit"])
+@pytest.mark.parametrize(
+    "exec, options",
+    [
+        ("finite-volume-heat-3d", ["--save-final-state-only", "--init-sol=crenel"]),
+        ("finite-volume-linear-convection-3d", ["--nfiles=1"]),
+    ],
+)
+def test_finite_volume_demo_3d(exec, options, time_scheme, tmp_path):
+    cmd = [
+        get_executable(Path("../build/demos/FiniteVolume/"), exec),
+        "--path",
+        str(tmp_path),
+        "--min-level=2",
+        "--max-level=4",
+        "--Tf=0.01",
+        *options,
+    ]
+    if time_scheme == "explicit" and exec == "finite-volume-heat-3d":
+        cmd.append("--explicit")
+    if time_scheme == "implicit" and exec == "finite-volume-linear-convection-3d":
+        cmd.append("--implicit")
+    subprocess.run(cmd, check=True, capture_output=True)
 
 
 @pytest.mark.h5diff()
