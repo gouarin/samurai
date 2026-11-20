@@ -962,6 +962,411 @@ auto mapped_prediction_fn(const PolysquareMap& map, bool enabled, const Field* u
     };
 }
 
+// Weight of the coarse cell s - 1 in the prediction of the child of the
+// given parity, in one direction
+double prediction_weight(std::size_t parity, std::size_t s)
+{
+    static const auto even = samurai::prediction_coefficients<1>(0, 0).c;
+    static const auto odd  = samurai::prediction_coefficients<1>(1, 0).c;
+    return parity == 0 ? even[s] : odd[s];
+}
+
+// Mean Jacobians |K| / h^2 of the cells of every level, computed once from
+// the areas of the quads of the geometry grid. The areas are nested, so the
+// Jacobian of a cell is the mean of the Jacobians of its children.
+class JacobianPyramid
+{
+  public:
+
+    explicit JacobianPyramid(const PolysquareMap& map)
+        : m_map(map)
+        , m_levels(map.level() + 1)
+    {
+        const long n = map.size();
+        auto& fine   = m_levels[map.level()];
+        fine.assign(static_cast<std::size_t>(n * n), 0.);
+        for (long j = 0; j < n; ++j)
+        {
+            for (long i = 0; i < n; ++i)
+            {
+                if (map.quad_in_domain(i, j))
+                {
+                    fine[static_cast<std::size_t>(j * n + i)] = std::abs(polygon_area(map.polygon({i, j, 1}))) / (map.step() * map.step());
+                }
+            }
+        }
+        for (std::size_t level = map.level(); level-- > 0;)
+        {
+            const long nc      = n >> (map.level() - level);
+            const auto& finer  = m_levels[level + 1];
+            auto& coarse       = m_levels[level];
+            const auto at_fine = [&](long i, long j)
+            {
+                return finer[static_cast<std::size_t>(j * 2 * nc + i)];
+            };
+            coarse.resize(static_cast<std::size_t>(nc * nc));
+            for (long j = 0; j < nc; ++j)
+            {
+                for (long i = 0; i < nc; ++i)
+                {
+                    coarse[static_cast<std::size_t>(j * nc + i)] = 0.25
+                                                                 * (at_fine(2 * i, 2 * j) + at_fine(2 * i + 1, 2 * j)
+                                                                    + at_fine(2 * i, 2 * j + 1) + at_fine(2 * i + 1, 2 * j + 1));
+                }
+            }
+        }
+    }
+
+    // Mean Jacobian of the cell (i, j) of 'level'. A cell outside the domain
+    // (a ghost) takes the Jacobian of its mirror image inside.
+    double operator()(std::size_t level, long i, long j) const
+    {
+        const auto inside = mirrored(level, i, j);
+        const long n      = m_map.size() >> (m_map.level() - level);
+        return m_levels[level][static_cast<std::size_t>(inside[1] * n + inside[0])];
+    }
+
+    // The cell (i, j) of 'level' itself if it lies in the domain, otherwise
+    // its mirror image across the nearest wall
+    std::array<long, 2> mirrored(std::size_t level, long i, long j) const
+    {
+        const long s   = 1L << (m_map.level() - level);
+        const auto box = m_map.mirrored_into_domain({i * s, j * s, s});
+        return {box.i0 / s, box.j0 / s};
+    }
+
+    bool in_domain(std::size_t level, long i, long j) const
+    {
+        return mirrored(level, i, j) == std::array<long, 2>{i, j};
+    }
+
+    // Entry of the 3 x 3 stencil around a cell of the domain that supplies
+    // the entry (a, b). An entry outside the domain is replaced by its
+    // mirror image across the wall that separates it from the central cell,
+    // which is itself an entry of the stencil. Unlike mirrored(), the choice
+    // of the wall at a reentrant corner depends on the central cell.
+    std::array<std::size_t, 2> stencil_source(std::size_t level, long i, long j, std::size_t a, std::size_t b) const
+    {
+        const long ia = i + static_cast<long>(a) - 1;
+        const long jb = j + static_cast<long>(b) - 1;
+        if (in_domain(level, ia, jb))
+        {
+            return {a, b};
+        }
+        if (in_domain(level, i, jb))
+        {
+            return {1, b};
+        }
+        if (in_domain(level, ia, j))
+        {
+            return {a, 1};
+        }
+        return {1, 1};
+    }
+
+    // Geometric detail: detail of the Jacobian in the child
+    // (2 i + dx, 2 j + dy) of the cell (i, j) of 'level', i.e. what the
+    // standard prediction misses of the Jacobian of that child.
+    double detail(std::size_t level, long i, long j, std::size_t dx, std::size_t dy) const
+    {
+        double predicted = 0;
+        for (std::size_t a = 0; a < 3; ++a)
+        {
+            for (std::size_t b = 0; b < 3; ++b)
+            {
+                const auto src = stencil_source(level, i, j, a, b);
+                predicted += prediction_weight(dx, a) * prediction_weight(dy, b)
+                           * (*this)(level, i + static_cast<long>(src[0]) - 1, j + static_cast<long>(src[1]) - 1);
+            }
+        }
+        return (*this)(level + 1, 2 * i + static_cast<long>(dx), 2 * j + static_cast<long>(dy)) - predicted;
+    }
+
+  private:
+
+    const PolysquareMap& m_map;
+    std::vector<std::vector<double>> m_levels;
+};
+
+// Values of a field in the 3 x 3 cells of 'level' around each cell of the
+// row j starting at i0, which must lie in the domain. A cell outside the
+// domain takes the value of its mirror image, which is one of the 3 x 3
+// cells. Its q is then consistent with its Jacobian, which the ghosts
+// filled by the boundary condition are not: below the finest level they hold
+// the mean of finer ghosts, not the value of the mirror cell.
+template <class Field>
+class CoarseStencil
+{
+  public:
+
+    CoarseStencil(const Field& field, const JacobianPyramid& jacobian, std::size_t level, long i0, long j)
+        : m_field(field)
+        , m_jacobian(jacobian)
+        , m_level(level)
+        , m_i0(i0)
+        , m_j(j)
+    {
+        for (std::size_t b = 0; b < 3; ++b)
+        {
+            m_row[b] = static_cast<std::size_t>(
+                field.mesh().get_index(level, static_cast<int>(i0 - 1), static_cast<int>(j + static_cast<long>(b) - 1)));
+        }
+    }
+
+    std::array<std::array<double, 3>, 3> operator()(long i) const
+    {
+        std::array<std::array<double, 3>, 3> values;
+        for (std::size_t a = 0; a < 3; ++a)
+        {
+            for (std::size_t b = 0; b < 3; ++b)
+            {
+                values[a][b] = m_field[m_row[b] + static_cast<std::size_t>(i - m_i0) + a];
+            }
+        }
+        for (std::size_t a = 0; a < 3; ++a)
+        {
+            for (std::size_t b = 0; b < 3; ++b)
+            {
+                const auto src = m_jacobian.stencil_source(m_level, i, m_j, a, b);
+                values[a][b]   = values[src[0]][src[1]];
+            }
+        }
+        return values;
+    }
+
+  private:
+
+    const Field& m_field;
+    const JacobianPyramid& m_jacobian;
+    std::size_t m_level;
+    long m_i0;
+    long m_j;
+    std::array<std::size_t, 3> m_row;
+};
+
+// Well-balanced prediction of q = |K| u / h^2 in the child
+// (2 i + dx, 2 j + dy) of the cell (i, j) of 'level', from the values of q
+// in the 3 x 3 cells around it:
+//     q_hat = P(q) + u_parent dJ,
+// where P is the standard prediction and dJ the geometric detail. The mean
+// of the children is the parent, since the dJ of the children sum to zero,
+// and a constant u is predicted exactly whatever the map: with q = c J,
+// P(q) = c P(J) and q_hat = c J_child.
+double well_balanced_prediction(const std::array<std::array<double, 3>, 3>& q,
+                                const JacobianPyramid& jacobian,
+                                std::size_t level,
+                                long i,
+                                long j,
+                                std::size_t dx,
+                                std::size_t dy)
+{
+    double predicted = 0;
+    for (std::size_t a = 0; a < 3; ++a)
+    {
+        for (std::size_t b = 0; b < 3; ++b)
+        {
+            predicted += prediction_weight(dx, a) * prediction_weight(dy, b) * q[a][b];
+        }
+    }
+    return predicted + q[1][1] / jacobian(level, i, j) * jacobian.detail(level, i, j, dx, dy);
+}
+
+// Prediction function of the mesh adaptation: fills the children created by
+// refinement with the well-balanced prediction.
+inline auto well_balanced_prediction_fn(const JacobianPyramid& jacobian)
+{
+    return [&jacobian](auto& new_field, const auto& old_field)
+    {
+        return [&new_field, &old_field, &jacobian](std::size_t level, const auto& interval, const auto& index)
+        {
+            const long j = index[0];
+            const CoarseStencil stencil(old_field, jacobian, level, interval.start, j);
+            for (std::size_t dy = 0; dy < 2; ++dy)
+            {
+                const auto row = static_cast<std::size_t>(
+                    new_field.mesh().get_index(level + 1, 2 * interval.start, static_cast<int>(2 * j + static_cast<long>(dy))));
+                for (long i = interval.start; i < interval.end; ++i)
+                {
+                    const auto q = stencil(i);
+                    for (std::size_t dx = 0; dx < 2; ++dx)
+                    {
+                        new_field[row + static_cast<std::size_t>(2 * (i - interval.start))
+                                  + dx] = well_balanced_prediction(q, jacobian, level, i, j, dx, dy);
+                    }
+                }
+            }
+        };
+    };
+}
+
+// Replaces the ghosts of the domain that update_ghost_mr filled with the
+// standard prediction by their well-balanced prediction, level by level
+// since a ghost may be predicted from another one.
+template <class Field>
+void predict_ghosts_well_balanced(Field& q, const JacobianPyramid& jacobian)
+{
+    using mesh_id_t = typename Field::mesh_t::mesh_id_t;
+    auto& mesh      = q.mesh();
+    for (std::size_t level = 1; level <= mesh.max_level(); ++level)
+    {
+        auto pred_ghosts = samurai::difference(mesh[mesh_id_t::all_cells][level],
+                                               samurai::union_(mesh[mesh_id_t::cells][level], mesh[mesh_id_t::proj_cells][level]));
+        auto set         = samurai::intersection(pred_ghosts, mesh.subdomain(level), mesh[mesh_id_t::all_cells][level - 1]).on(level);
+        set(
+            [&](const auto& interval, const auto& index)
+            {
+                const long j = index[0];
+                const CoarseStencil stencil(q, jacobian, level - 1, interval.start >> 1, j >> 1);
+                const auto row = static_cast<std::size_t>(mesh.get_index(level, interval.start, static_cast<int>(j)));
+                for (long i = interval.start; i < interval.end; ++i)
+                {
+                    if (!jacobian.in_domain(level, i, j))
+                    {
+                        continue; // outside the domain: never read, see CoarseStencil
+                    }
+                    q[row + static_cast<std::size_t>(i - interval.start)] = well_balanced_prediction(stencil(i >> 1),
+                                                                                                     jacobian,
+                                                                                                     level - 1,
+                                                                                                     i >> 1,
+                                                                                                     j >> 1,
+                                                                                                     static_cast<std::size_t>(i & 1),
+                                                                                                     static_cast<std::size_t>(j & 1));
+                }
+            });
+    }
+}
+
+// Multiresolution adaptation of q = |K| u / h^2 with the well-balanced
+// prediction. It follows samurai::Adapt step by step. Two things differ:
+// the predicted ghosts of q are well-balanced, and the detail is
+//     d = (q - q_hat) / J,
+// in the units of u, instead of the detail of the standard prediction. The
+// refinement then depends on the solution and not on the Jacobian, without
+// any other field than q.
+template <class Field>
+class WellBalancedAdapt
+{
+  public:
+
+    WellBalancedAdapt(Field& q, const JacobianPyramid& jacobian)
+        : m_q(q)
+        , m_jacobian(jacobian)
+        , m_detail(samurai::make_scalar_field<double>("detail", q.mesh()))
+        , m_tag(samurai::make_scalar_field<std::uint8_t>("tag", q.mesh()))
+    {
+    }
+
+    void operator()(samurai::mra_config& cfg)
+    {
+        auto& mesh = m_q.mesh();
+        cfg.parse_args();
+        if (cfg.relative_detail())
+        {
+            throw std::runtime_error("the well-balanced adaptation does not handle relative details");
+        }
+        for (std::size_t ite = 0; ite < mesh.max_level() - mesh.min_level(); ++ite)
+        {
+            m_detail.resize();
+            m_detail.fill(0);
+            m_tag.resize();
+            m_tag.fill(0);
+            if (harten(ite, cfg))
+            {
+                break;
+            }
+        }
+    }
+
+  private:
+
+    using mesh_t    = typename Field::mesh_t;
+    using mesh_id_t = typename mesh_t::mesh_id_t;
+
+    bool harten(std::size_t ite, const samurai::mra_config& cfg)
+    {
+        auto& mesh                  = m_q.mesh();
+        const std::size_t min_level = mesh.min_level();
+        const std::size_t max_level = mesh.max_level();
+
+        samurai::for_each_cell(mesh[mesh_id_t::cells],
+                               [&](const auto& cell)
+                               {
+                                   m_tag[cell] = static_cast<std::uint8_t>(samurai::CellFlag::keep);
+                               });
+
+        samurai::update_ghost_mr(m_q);
+        predict_ghosts_well_balanced(m_q, m_jacobian);
+
+        for (std::size_t level = ((min_level > 0) ? min_level - 1 : 0); level < max_level - ite; ++level)
+        {
+            samurai::ghosts_below_cells(mesh, level)(
+                [&](const auto& interval, const auto& index)
+                {
+                    const long j = index[0];
+                    const CoarseStencil stencil(m_q, m_jacobian, level, interval.start, j);
+                    for (std::size_t dy = 0; dy < 2; ++dy)
+                    {
+                        const long jc  = 2 * j + static_cast<long>(dy);
+                        const auto row = static_cast<std::size_t>(mesh.get_index(level + 1, 2 * interval.start, static_cast<int>(jc)));
+                        for (long i = interval.start; i < interval.end; ++i)
+                        {
+                            const auto q = stencil(i);
+                            for (std::size_t dx = 0; dx < 2; ++dx)
+                            {
+                                const auto child = row + static_cast<std::size_t>(2 * (i - interval.start)) + dx;
+                                m_detail[child]  = (m_q[child] - well_balanced_prediction(q, m_jacobian, level, i, j, dx, dy))
+                                                / m_jacobian(level + 1, 2 * i + static_cast<long>(dx), jc);
+                            }
+                        }
+                    }
+                });
+        }
+
+        for (std::size_t level = std::max(min_level, static_cast<std::size_t>(1)); level <= max_level - ite; ++level)
+        {
+            const double eps_l = cfg.epsilon() / static_cast<double>(1 << (dim * (max_level - level)));
+            auto subset        = samurai::intersection(mesh[mesh_id_t::cells][level], mesh[mesh_id_t::all_cells][level - 1]).on(level - 1);
+            subset.apply_op(samurai::mr_criteria(m_detail, m_tag, eps_l, cfg.regularity() + static_cast<double>(dim)));
+            samurai::update_tag_subdomains(level, m_tag, true);
+        }
+
+        if (samurai::args::refine_boundary)
+        {
+            samurai::keep_boundary_refined(mesh, m_tag);
+        }
+
+        for (std::size_t level = max_level; level > 0; --level)
+        {
+            auto keep_subset = samurai::intersection(mesh[mesh_id_t::cells][level], mesh[mesh_id_t::all_cells][level - 1]).on(level - 1);
+            samurai::update_tag_periodic(level, m_tag);
+            samurai::update_tag_subdomains(level, m_tag);
+            keep_subset.apply_op(samurai::maximum(m_tag));
+        }
+
+        auto new_ca = samurai::update_cell_array_from_tag(mesh[mesh_id_t::cells], m_tag);
+        samurai::make_graduation(new_ca,
+                                 mesh.domain_pyramid(),
+                                 mesh.mpi_neighbourhood(),
+                                 mesh.periodicity(),
+                                 mesh.graduation_width(),
+                                 mesh.max_stencil_radius());
+        if (mesh[mesh_id_t::cells] == new_ca)
+        {
+            return true;
+        }
+
+        mesh_t new_mesh{new_ca, mesh};
+        samurai::update_fields(well_balanced_prediction_fn(m_jacobian), new_mesh, m_q);
+        mesh.swap(new_mesh);
+        return false;
+    }
+
+    Field& m_q;
+    const JacobianPyramid& m_jacobian;
+    samurai::ScalarField<mesh_t, double> m_detail;
+    samurai::ScalarField<mesh_t, std::uint8_t> m_tag;
+};
+
 template <class Field, class Exact>
 Diagnostics compute_diagnostics(const Field& q, const PolysquareMap& map, Exact&& exact)
 {
@@ -1094,6 +1499,7 @@ int main(int argc, char* argv[])
     bool bump                  = true;
     std::size_t nfiles         = 0;
     bool on_u                  = false;
+    bool well_balanced         = false;
     double base                = 0;
     bool mapped                = true;
     bool u_source              = false;
@@ -1121,6 +1527,11 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->group("Simulation parameters");
     app.add_flag("--detail-on-u", on_u, "Compute the details on u instead of q = |K| u / h^2")
+        ->capture_default_str()
+        ->group("Simulation parameters");
+    app.add_flag("--well-balanced",
+                 well_balanced,
+                 "Compute the details on q with the well-balanced prediction, which removes the detail of the Jacobian")
         ->capture_default_str()
         ->group("Simulation parameters");
     app.add_flag("--optimized-map,!--analytic-map", optimize_map, "Minimize Garanzha's energy of the map, starting from the analytic one")
@@ -1201,10 +1612,18 @@ int main(int argc, char* argv[])
     // geometry does not drive the refinement, and q follows the new mesh.
     auto adapt_on_q = samurai::make_MRAdapt(mapped_prediction_fn<decltype(u_phys)>(map, mapped, nullptr), q);
     auto adapt_on_u = samurai::make_MRAdapt(mapped_prediction_fn(map, mapped, u_source ? &u_phys : nullptr), u_phys);
+    // With --well-balanced, the details are computed on q with a prediction
+    // that knows the Jacobian, and q is the only field of the adaptation.
+    const JacobianPyramid jacobian(map);
+    WellBalancedAdapt adapt_well_balanced(q, jacobian);
     auto mra_config = samurai::mra_config().epsilon(1e-3); // --mr-eps overrides it
     auto adapt      = [&]()
     {
-        if (on_u)
+        if (well_balanced)
+        {
+            adapt_well_balanced(mra_config);
+        }
+        else if (on_u)
         {
             update_u();
             adapt_on_u(mra_config, q);
