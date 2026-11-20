@@ -843,6 +843,52 @@ auto make_mapped_upwind(const PolysquareMap& map)
     return samurai::make_flux_based_scheme(upwind);
 }
 
+// Second-order counterpart of make_mapped_upwind: the upwind value at the
+// face is u + slope / 2, with a slope taken along the grid line in index
+// space. On a smooth map this is second order, although the cells are not
+// uniform in physical space. With the limiter, the slope is the monotonized
+// central one; without it, the centered one (Fromm's scheme).
+// A constant state has a zero slope, so the scheme stays free-stream
+// preserving.
+template <class Field>
+auto make_mapped_muscl(const PolysquareMap& map, bool limiter)
+{
+    using cfg = samurai::FluxConfig<samurai::SchemeType::NonLinear, 4, Field, Field>;
+
+    samurai::FluxDefinition<cfg> muscl;
+    samurai::static_for<0, dim>::apply(
+        [&](auto _d)
+        {
+            static constexpr std::size_t d = _d();
+
+            muscl[d].stencil = samurai::line_stencil<dim, d>(-1, 0, 1, 2);
+
+            muscl[d].cons_flux_function =
+                [&map, limiter](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& data, const samurai::StencilValues<cfg>& u)
+            {
+                auto slope = [limiter](double backward, double forward)
+                {
+                    const double centered = 0.5 * (backward + forward);
+                    if (!limiter)
+                    {
+                        return centered;
+                    }
+                    if (backward * forward <= 0)
+                    {
+                        return 0.;
+                    }
+                    return std::copysign(std::min({2 * std::abs(backward), 2 * std::abs(forward), std::abs(centered)}), centered);
+                };
+
+                // the face lies between the cells 1 and 2 of the stencil
+                const double F = face_flux(map, data.cells[2], d);
+                const double u_face = (F >= 0) ? u[1] + 0.5 * slope(u[1] - u[0], u[2] - u[1]) : u[2] - 0.5 * slope(u[2] - u[1], u[3] - u[2]);
+                flux = F * u_face / data.cell_length;
+            };
+        });
+    return samurai::make_flux_based_scheme(muscl);
+}
+
 struct Diagnostics
 {
     double mass         = 0;
@@ -1662,6 +1708,8 @@ int main(int argc, char* argv[])
     bool on_u                  = false;
     bool well_balanced         = false;
     bool detail_decay          = false;
+    std::size_t order          = 1;
+    bool limiter               = true;
     double base                = 0;
     bool mapped                = true;
     bool u_source              = false;
@@ -1679,6 +1727,13 @@ int main(int argc, char* argv[])
     app.add_option("--cfl", cfl, "The CFL")->capture_default_str()->group("Simulation parameters");
     app.add_flag("--mr,!--no-mr", mr, "Adapt the mesh with multiresolution")->capture_default_str()->group("Simulation parameters");
     app.add_flag("--bump,!--constant", bump, "Initial condition: Gaussian bump or constant state")
+        ->capture_default_str()
+        ->group("Simulation parameters");
+    app.add_option("--order", order, "Order of the scheme: 1 (upwind, forward Euler) or 2 (MUSCL, Heun)")
+        ->capture_default_str()
+        ->check(CLI::Range(1, 2))
+        ->group("Simulation parameters");
+    app.add_flag("--limiter,!--no-limiter", limiter, "With --order 2, limit the slopes (monotonized central) or not (Fromm)")
         ->capture_default_str()
         ->group("Simulation parameters");
     app.add_option("--background", base, "Constant state added to the bump")->capture_default_str()->group("Simulation parameters");
@@ -1715,7 +1770,7 @@ int main(int argc, char* argv[])
     samurai::DomainBuilder<dim> domain({-2., -2.}, {2., 2.});
     domain.remove({-1., -1.}, {1., 1.});
 
-    auto config = samurai::mesh_config<dim>().min_level(min_level).max_level(max_level);
+    auto config = samurai::mesh_config<dim>().min_level(min_level).max_level(max_level).max_stencil_size(order == 2 ? 4 : 2);
     auto mesh   = samurai::mra::make_mesh(domain, config);
 
     // --min-level and --max-level override the values above
@@ -1767,18 +1822,24 @@ int main(int argc, char* argv[])
 
     auto u_phys = samurai::make_scalar_field<double>("u", mesh);
     samurai::make_bc<samurai::Neumann<1>>(u_phys, 0.);
-    auto update_u = [&]()
+    auto update_u_from = [&](const auto& q_source)
     {
         u_phys.resize();
         samurai::for_each_cell(mesh,
                                [&](const auto& cell)
                                {
-                                   u_phys[cell] = q[cell] / mean_jacobian(map, cell);
+                                   u_phys[cell] = q_source[cell] / mean_jacobian(map, cell);
                                });
+    };
+    auto update_u = [&]()
+    {
+        update_u_from(q);
     };
 
     auto qnp1   = samurai::make_scalar_field<double>("qnp1", mesh);
-    auto scheme = make_mapped_upwind<decltype(q)>(map);
+    auto q1     = samurai::make_scalar_field<double>("q1", mesh);
+    auto upwind = make_mapped_upwind<decltype(q)>(map);
+    auto muscl  = make_mapped_muscl<decltype(q)>(map, limiter);
 
     // With --detail-on-u, the details are computed on u so that the
     // geometry does not drive the refinement, and q follows the new mesh.
@@ -1815,7 +1876,9 @@ int main(int argc, char* argv[])
         }
     }
 
-    const double dt = cfl * stable_time_step(map);
+    // The slopes can double the value carried by an outgoing flux, hence
+    // the factor 1 / 2 at order 2.
+    const double dt = (order == 2 ? 0.5 : 1.) * cfl * stable_time_step(map);
 
     auto exact = [&](double t)
     {
@@ -1867,7 +1930,18 @@ int main(int argc, char* argv[])
         }
         qnp1.resize();
         update_u();
-        qnp1 = q - dt_n * scheme(u_phys);
+        if (order == 1)
+        {
+            qnp1 = q - dt_n * upwind(u_phys);
+        }
+        else
+        {
+            // Heun's method
+            q1.resize();
+            q1 = q - dt_n * muscl(u_phys);
+            update_u_from(q1);
+            qnp1 = 0.5 * q + 0.5 * (q1 - dt_n * muscl(u_phys));
+        }
         samurai::swap(q, qnp1);
         t += dt_n;
         ++nt;
