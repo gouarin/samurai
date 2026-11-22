@@ -14,6 +14,10 @@ concurrency:
 env:
     UCX_TLS: self,sm,tcp
 
+# Every job configures with -DSAMURAI_EMBED_GIT_SHA=OFF. With the SHA of the commit, the
+# files that include samurai.hpp differ at each commit, and ccache compiles them again
+# whatever the commit changes.
+
 jobs:
     #
     # Decide which jobs this pull request needs. Documentation and project
@@ -225,6 +229,7 @@ jobs:
                   CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Release \
                       -DWITH_PETSC=ON \
@@ -329,6 +334,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -DCMAKE_BUILD_TYPE=Release \
                       -DWITH_MPI=ON \
                       -DWITH_PETSC=ON \
@@ -625,6 +631,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Release \
                       -DWITH_PETSC=ON \
@@ -706,6 +713,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Debug \
                       -DSAMURAI_CHECK_NAN=ON \
@@ -784,6 +792,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Release \
                       -DWITH_OPENMP=ON \
@@ -858,6 +867,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DWITH_MPI=ON \
                       -DCMAKE_BUILD_TYPE=Debug \
@@ -954,6 +964,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -DWITH_MPI=${{ matrix.mpi }} \
                       -DWITH_PETSC=ON \
                       -DBUILD_SNIPPETS=ON
@@ -1023,6 +1034,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Release \
                       -DBUILD_BENCHMARKS=ON

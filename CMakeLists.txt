@@ -57,6 +57,7 @@ option(ENABLE_COVERAGE "Activate coverage" OFF)
 option(WITH_MPI "Enable MPI" OFF)
 option(WITH_OPENMP "Enable OpenMP" OFF)
 option(WITH_PETSC "Enable PETSc" OFF)
+option(SAMURAI_EMBED_GIT_SHA "Expose the short SHA of the current commit to samurai::git_sha()" ON)
 option(SAMURAI_ENABLE_INLINE "Enable inline keyword for performance" ON)
 option(SAMURAI_FORCE_INLINE "Force aggressive inlining (takes precedence)" OFF)
 
@@ -123,8 +124,14 @@ target_compile_definitions(samurai INTERFACE
 # When the current commit is not exactly on a tag (i.e. not a release), also
 # expose its short SHA so that `--info` can display it. Captured at configure
 # time; harmless when git is unavailable (e.g. building from a source tarball).
+#
+# The SHA is a compile definition of every translation unit, and samurai.hpp
+# expands it through version.hpp: with a compiler cache, every file that
+# includes samurai.hpp is compiled again at each new commit, whatever the
+# commit changes. SAMURAI_EMBED_GIT_SHA=OFF leaves the SHA out, for the builds
+# that rely on the cache across commits, such as the CI.
 find_package(Git QUIET)
-if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+if(SAMURAI_EMBED_GIT_SHA AND Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   execute_process(
     COMMAND ${GIT_EXECUTABLE} describe --tags --exact-match
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

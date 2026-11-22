@@ -67,6 +67,7 @@ jobs:
                   cmake \
                       . \
                       -Bbuild \
+                      -DSAMURAI_EMBED_GIT_SHA=OFF \
                       -GNinja \
                       -DCMAKE_BUILD_TYPE=Debug \
                       -DENABLE_COVERAGE=ON \
