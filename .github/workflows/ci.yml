@@ -6,7 +6,7 @@ name: samurai CI
 on:
     pull_request:
     push:
-        branches: [main]
+        branches: [main, ci-ccache-base]
 
 # A new push to a pull request cancels its previous run. The runs on main are
 # not cancelled: each one saves the ccache caches of the next pull requests.
@@ -311,7 +311,8 @@ jobs:
     #########################################################
     linux-mpi-mamba:
         needs: [changes, pre-commit, cppcheck]
-        if: needs.changes.outputs.code == 'true'
+        # TEST ONLY: no self-hosted runner on the fork.
+        if: false
         runs-on: self-hosted
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

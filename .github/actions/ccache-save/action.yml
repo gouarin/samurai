@@ -13,7 +13,7 @@ inputs:
     branch:
         description: The only branch whose pushes save the cache.
         required: false
-        default: main
+        default: ci-ccache-base
 
 runs:
     using: composite
