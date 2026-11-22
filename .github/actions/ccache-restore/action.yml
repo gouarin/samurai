@@ -1,0 +1,53 @@
+name: Restore the ccache cache
+description: >-
+    Restore the most recent ccache cache saved on main for this job, and set
+    the ccache configuration of the job. Pull requests can read the caches of
+    their base branch: they start from the objects of the last build of main.
+    Pair it with ccache-save, which saves the cache on main only.
+
+inputs:
+    name:
+        description: >-
+            Name of the cache, one per job and configuration (for instance
+            linux-gcc-13). The same name must be given to ccache-save.
+        required: true
+    max-size:
+        description: Maximum size of the ccache directory during the job.
+        required: false
+        default: 2G
+
+runs:
+    using: composite
+    steps:
+        - name: ccache configuration
+          id: config
+          shell: bash
+          run: |
+              if [ "$RUNNER_OS" = "macOS" ]; then
+                  dir="$HOME/Library/Caches/ccache"
+              else
+                  dir="$HOME/.cache/ccache"
+              fi
+              echo "dir=$dir" >> "$GITHUB_OUTPUT"
+              {
+                  echo "CCACHE_DIR=$dir"
+                  echo "CCACHE_MAXSIZE=${{ inputs.max-size }}"
+                  # Paths under the workspace are hashed relative to it.
+                  echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+                  # The compilers are installed again at each run: their
+                  # modification time changes, their content does not.
+                  echo "CCACHE_COMPILERCHECK=content"
+                  # ccache-save drops the entries this job did not use.
+                  echo "CCACHE_JOB_START=$(date +%s)"
+              } >> "$GITHUB_ENV"
+
+        # The key never matches: the restore-keys prefix selects the most
+        # recent cache of this name. The trailing slash keeps a name from
+        # matching a longer one (check-nan and check-nan-mpi).
+        - name: Restore the ccache cache
+          uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          with:
+              path: ${{ steps.config.outputs.dir }}
+              key: ccache/${{ inputs.name }}/${{ github.run_id }}-${{ github.run_attempt }}
+              restore-keys: |
+                  ccache/${{ inputs.name }}/

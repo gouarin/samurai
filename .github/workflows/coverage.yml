@@ -3,7 +3,8 @@ name: coverage
 # Coverage of the C++ library (include/samurai/) and of the Python tools
 # (tools/), sent to Codecov. ci.yml calls this workflow on pull requests; it
 # also runs on every push to main, so that Codecov has the coverage of the base
-# commit to compare a pull request with.
+# commit to compare a pull request with, and to save the ccache cache that the
+# pull requests restore.
 #
 # Uploads from pull requests opened from forks need no token. Uploads from
 # main need the CODECOV_TOKEN secret, unless token authentication for public
@@ -17,8 +18,10 @@ on:
     push:
         branches: [main]
 
+# actions: write lets ccache-save delete the previous ccache caches of main.
 permissions:
     contents: read
+    actions: write
 
 # Same reason as in ci.yml: PETSc calls MPI_Init even for single-rank runs.
 env:
@@ -35,14 +38,10 @@ jobs:
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  key: ccache-coverage-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-coverage-
+                  name: coverage
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -58,7 +57,6 @@ jobs:
             - name: Compiler, PETSc and coverage tools installation
               run: |
                   micromamba install -y cxx-compiler ccache petsc pkg-config gcovr=8.3 pytest-cov yt
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             # ENABLE_COVERAGE builds with --coverage -O0 -g.
@@ -89,6 +87,11 @@ jobs:
             - name: ccache statistics
               if: always()
               run: ccache --show-stats --verbose
+
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: coverage
 
             # The 6D projection/prediction round trips are left out: at -O0
             # with coverage, scalar_s1_6D alone takes more than 8 minutes, and

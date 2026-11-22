@@ -1,0 +1,60 @@
+name: Save the ccache cache
+description: >-
+    Save the ccache cache restored by ccache-restore, on a push to main only,
+    and delete the caches of the same name saved by the previous runs on main.
+    Pull requests do not save: they read the cache of main, and their own
+    caches would only fill the 10 GB of the repository. The job needs the
+    actions: write permission to delete the previous caches.
+
+inputs:
+    name:
+        description: Name of the cache, as given to ccache-restore.
+        required: true
+    branch:
+        description: The only branch whose pushes save the cache.
+        required: false
+        default: main
+
+runs:
+    using: composite
+    steps:
+        # A hit updates the modification time of the entry. The entries older
+        # than the job were not used by this build: they are dropped, so the
+        # cache holds the objects of the last build of main and nothing more.
+        - name: Drop the ccache entries this build did not use
+          if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.branch)
+          shell: bash -l {0}
+          run: |
+              ccache --evict-older-than "$(( $(date +%s) - CCACHE_JOB_START + 60 ))s"
+              ccache --show-stats
+              du -sh "$CCACHE_DIR"
+
+        - name: Save the ccache cache
+          if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.branch)
+          uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          with:
+              path: ${{ env.CCACHE_DIR }}
+              key: ccache/${{ inputs.name }}/${{ github.run_id }}-${{ github.run_attempt }}
+
+        # A failure here only leaves an old cache behind: GitHub evicts it
+        # after 7 days without use, or when the repository exceeds 10 GB.
+        - name: Delete the previous ccache caches of this branch
+          if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.branch)
+          shell: bash
+          env:
+              GH_TOKEN: ${{ github.token }}
+              PREFIX: ccache/${{ inputs.name }}/
+              KEY: ccache/${{ inputs.name }}/${{ github.run_id }}-${{ github.run_attempt }}
+          run: |
+              if ! keys=$(gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" \
+                      --key "$PREFIX" --limit 100 --json key --jq '.[].key'); then
+                  echo "::warning::Cannot list the previous ccache caches."
+                  exit 0
+              fi
+              while IFS= read -r key; do
+                  if [ -n "$key" ] && [ "$key" != "$KEY" ]; then
+                      echo "Deleting $key"
+                      gh cache delete "$key" --repo "$GITHUB_REPOSITORY" \
+                          || echo "::warning::Cannot delete the cache $key."
+                  fi
+              done <<< "$keys"

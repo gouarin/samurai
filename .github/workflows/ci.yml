@@ -1,11 +1,18 @@
 name: samurai CI
 
-on: [pull_request]
+# The pushes to main save the ccache caches that the pull requests restore
+# (.github/actions/ccache-restore and ccache-save): a pull request can read the
+# caches of its base branch, not those of another pull request.
+on:
+    pull_request:
+    push:
+        branches: [main]
 
-# This section cancels previous runs for the same PR
+# A new push to a pull request cancels its previous run. The runs on main are
+# not cancelled: each one saves the ccache caches of the next pull requests.
 concurrency:
     group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-    cancel-in-progress: true
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # GitHub-hosted runners on Azure sometimes expose a "mana" RDMA/InfiniBand NIC whose UCX
 # driver randomly fails to initialize (UCX ERROR ... mana_0 ... failed: Operation not supported),
@@ -20,8 +27,9 @@ env:
 
 jobs:
     #
-    # Decide which jobs this pull request needs. Documentation and project
-    # metadata do not change the library, so they skip the build and test jobs.
+    # Decide which jobs this pull request, or this push to main, needs.
+    # Documentation and project metadata do not change the library, so they
+    # skip the build and test jobs.
     # The documentation snippets are compiled, and their outputs checked, when
     # they change or when the full CI runs: their outputs depend on the library.
     # Any file not listed below runs the full CI.
@@ -40,8 +48,10 @@ jobs:
             - name: Classify the changed files
               id: filter
               env:
-                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
-                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+                  # On a push, the previous head of the branch. It is all zeros
+                  # for a new branch: git diff fails and the full CI runs.
+                  BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
               run: |
                   if ! files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
                       echo "Cannot list the changed files: running the full CI."
@@ -129,6 +139,10 @@ jobs:
         needs: [changes, pre-commit, cppcheck]
         if: needs.changes.outputs.code == 'true'
         runs-on: ubuntu-latest
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         strategy:
             fail-fast: false
             matrix:
@@ -166,17 +180,10 @@ jobs:
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  # Rotating key: each run saves a fresh entry, restore-keys falls
-                  # back to the most recent cache for this compiler. A static key
-                  # would restore but never re-save, freezing the cache forever.
-                  key: ccache-linux-${{ matrix.cpp-version }}-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-linux-${{ matrix.cpp-version }}-
+                  name: linux-${{ matrix.cpp-version }}
 
             - name: Compiler and dev tools installation
               run: |
@@ -185,7 +192,6 @@ jobs:
 
             - name: ccache setup
               run: |
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             # - name: Information about ccache
@@ -251,6 +257,11 @@ jobs:
             - name: ccache statistics
               if: always()
               run: ccache --show-stats --verbose
+
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: linux-${{ matrix.cpp-version }}
 
             - name: Test with googletest
               shell: bash -l {0}
@@ -589,17 +600,17 @@ jobs:
         needs: [changes, pre-commit, cppcheck]
         if: needs.changes.outputs.code == 'true'
         runs-on: macos-26
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/Library/Caches/ccache
-                  key: ccache-macos-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-macos-
+                  name: macos
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -617,7 +628,6 @@ jobs:
               shell: bash -l {0}
               run: |
                   micromamba install -y cxx-compiler ccache
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             - name: micromamba informations
@@ -649,6 +659,11 @@ jobs:
               if: always()
               run: ccache --show-stats --verbose
 
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: macos
+
             - name: Generate ParaView reader reference files
               shell: bash -l {0}
               run: |
@@ -675,17 +690,17 @@ jobs:
         needs: [changes, pre-commit, cppcheck]
         if: needs.changes.outputs.code == 'true'
         runs-on: ubuntu-latest
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  key: ccache-linux-mamba-check-nan-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-linux-mamba-check-nan-
+                  name: linux-mamba-check-nan
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -699,7 +714,6 @@ jobs:
               shell: bash -l {0}
               run: |
                   micromamba install -y petsc pkg-config cxx-compiler ccache
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             - name: Conda informations
@@ -732,6 +746,11 @@ jobs:
               if: always()
               run: ccache --show-stats --verbose
 
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: linux-mamba-check-nan
+
             - name: test finite-volume-burgers
               shell: bash -l {0}
               run: |
@@ -754,17 +773,17 @@ jobs:
         needs: [changes, pre-commit, cppcheck]
         if: needs.changes.outputs.code == 'true'
         runs-on: ubuntu-latest
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  key: ccache-linux-mamba-openmp-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-linux-mamba-openmp-
+                  name: linux-mamba-openmp
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -778,7 +797,6 @@ jobs:
               shell: bash -l {0}
               run: |
                   micromamba install -y cxx-compiler ccache
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             - name: Conda informations
@@ -809,6 +827,11 @@ jobs:
               if: always()
               run: ccache --show-stats --verbose
 
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: linux-mamba-openmp
+
             - name: Test with googletest
               shell: bash -l {0}
               run: |
@@ -829,17 +852,17 @@ jobs:
         needs: [changes, pre-commit, cppcheck]
         if: needs.changes.outputs.code == 'true'
         runs-on: ubuntu-latest
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  key: ccache-linux-mamba-check-nan-mpi-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-linux-mamba-check-nan-mpi-
+                  name: linux-mamba-check-nan-mpi
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -853,7 +876,6 @@ jobs:
               shell: bash -l {0}
               run: |
                   micromamba install -y petsc pkg-config cxx-compiler ccache
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             - name: Conda informations
@@ -885,6 +907,11 @@ jobs:
               shell: bash -l {0}
               if: always()
               run: ccache --show-stats --verbose
+
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: linux-mamba-check-nan-mpi
 
             - name: test finite-volume-advection-2d
               shell: bash -l {0}
@@ -932,17 +959,17 @@ jobs:
                     - mpi: "ON"
                       environment-file: conda/mpi-environment.yml
         runs-on: ubuntu-latest
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  key: ccache-compile-snippets-mpi-${{ matrix.mpi }}-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-compile-snippets-mpi-${{ matrix.mpi }}-
+                  name: compile-snippets-mpi-${{ matrix.mpi }}
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -956,7 +983,6 @@ jobs:
               shell: bash -l {0}
               run: |
                   micromamba install -y cxx-compiler ccache petsc pkg-config
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             - name: Configure
@@ -991,6 +1017,11 @@ jobs:
               shell: bash -l {0}
               if: always()
               run: ccache --show-stats --verbose
+
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: compile-snippets-mpi-${{ matrix.mpi }}
     #
     # Build and run the benchmark suite (smoke test: catches build breaks and
     # runtime crashes/exceptions, not a performance check -- shared CI runners
@@ -1002,17 +1033,17 @@ jobs:
         needs: [changes, pre-commit, cppcheck]
         if: needs.changes.outputs.code == 'true'
         runs-on: ubuntu-latest
+        # actions: write lets ccache-save delete the previous caches of main.
+        permissions:
+            contents: read
+            actions: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-            - name: Cache
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+            - name: Restore the ccache cache
+              uses: ./.github/actions/ccache-restore
               with:
-                  path: |
-                      ~/.cache/ccache
-                  key: ccache-benchmarks-${{ github.run_id }}
-                  restore-keys: |
-                      ccache-benchmarks-
+                  name: benchmarks
 
             - name: Mamba and samurai env installation
               uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
@@ -1026,7 +1057,6 @@ jobs:
               shell: bash -l {0}
               run: |
                   micromamba install -y cxx-compiler ccache
-                  ccache --max-size=2G
                   ccache --zero-stats
 
             - name: Configure
@@ -1050,6 +1080,11 @@ jobs:
               if: always()
               run: ccache --show-stats --verbose
 
+            - name: Save the ccache cache
+              uses: ./.github/actions/ccache-save
+              with:
+                  name: benchmarks
+
             - name: Run benchmarks
               shell: bash -l {0}
               run: |
@@ -1061,12 +1096,16 @@ jobs:
     #
     # Coverage of the C++ tests and of the Python tools, sent to Codecov
     # (coverage.yml). It is left out of ci-status: a Codecov outage must not
-    # block a pull request, and the same tests run in the other jobs.
+    # block a pull request, and the same tests run in the other jobs. On main,
+    # coverage.yml runs on its own push trigger.
     #
     #########################################################
     coverage:
         needs: [changes, pre-commit, cppcheck]
-        if: needs.changes.outputs.code == 'true'
+        if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+        permissions:
+            contents: read
+            actions: write
         uses: ./.github/workflows/coverage.yml
         secrets:
             CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
