@@ -2,6 +2,7 @@
 // SPDX-License-Identifier:  BSD-3-Clause
 
 // Test of the ccache seeding: this comment changes one demo only.
+// Second demo-only change, after the header change.
 #include <array>
 
 #include <xtensor/containers/xfixed.hpp>
