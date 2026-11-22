@@ -1,6 +1,7 @@
 // Copyright 2018-2025 the samurai's authors
 // SPDX-License-Identifier:  BSD-3-Clause
 
+// Test of the ccache seeding: this comment changes one demo only.
 #include <array>
 
 #include <xtensor/containers/xfixed.hpp>
