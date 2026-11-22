@@ -198,7 +198,8 @@ jobs:
                   environment-file: conda/environment.yml
                   environment-name: samurai-env
                   cache-environment: true
-                  cache-environment-key: ${{ runner.os }}-${{ matrix.cpp-version }}-${{ hashFiles('conda/environment.yml') }}
+                  # The environment does not depend on the compiler: the six jobs share one cache.
+                  cache-environment-key: ${{ runner.os }}-${{ hashFiles('conda/environment.yml') }}
 
             # - name: Conda update
             #   shell: bash -l {0}
