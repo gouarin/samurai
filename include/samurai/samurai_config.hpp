@@ -39,6 +39,8 @@
 namespace samurai
 {
     static constexpr bool disable_color = true;
+    // Test of the ccache seeding: this constant changes a central header.
+    static constexpr int ccache_seeding_test = 1;
 
     template <class TValue, class TIndex>
     struct Interval;
