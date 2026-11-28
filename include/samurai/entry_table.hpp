@@ -194,7 +194,8 @@ namespace samurai
         };
 
         // What produce() emits to when they are not: each entry goes straight
-        // to the kernel, with the pool of that entry alone.
+        // to the kernel. The pool is kept for the whole traversal, as in a
+        // table, so that a range opened before an entry is emitted stays valid.
         template <class Entry, class Kernel>
         class EntryForwarder : public PoolWriter
         {
@@ -210,13 +211,12 @@ namespace samurai
             void operator()(const Entry& entry)
             {
                 call_kernel(m_kernel, entry, std::span<const std::size_t>(m_pool));
-                m_pool.clear();
             }
 
           private:
 
             Kernel& m_kernel;
-            std::vector<std::size_t>& m_pool;
+            const std::vector<std::size_t>& m_pool;
         };
 
         struct KeyBytesHash

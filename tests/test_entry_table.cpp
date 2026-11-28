@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -199,6 +200,40 @@ namespace samurai
             }
         };
 
+        // Same entries as grouped_cells, but each group is emitted only once the
+        // range of the next one is opened and filled.
+        struct grouped_cells_emitted_late
+        {
+            using entry_type = CellGroup;
+
+            std::size_t level;
+
+            void produce(const auto& mesh, auto& emit) const
+            {
+                std::optional<CellGroup> pending;
+                for_each_cell_row_with_next(mesh,
+                                            level,
+                                            [&](const auto& i, const auto& index)
+                                            {
+                                                const auto first = memory_offset(mesh, {level, i.start, index});
+                                                CellGroup group{first, emit.new_range()};
+                                                for (std::size_t k = 1; k < i.size(); ++k)
+                                                {
+                                                    emit.add(group.others, first + k);
+                                                }
+                                                if (pending)
+                                                {
+                                                    emit(*pending);
+                                                }
+                                                pending = group;
+                                            });
+                if (pending)
+                {
+                    emit(*pending);
+                }
+            }
+        };
+
         // Counts the traversals of its set expression: one per table recorded,
         // or one per call without tables.
         struct counted_cells
@@ -289,16 +324,20 @@ namespace samurai
                                   std::size_t n_rows     = 0;
                                   std::size_t n_weighted = 0;
                                   std::size_t n_grouped  = 0;
+                                  std::size_t n_late     = 0;
                                   for (std::size_t level = mesh.min_level(); level <= mesh.max_level(); ++level)
                                   {
                                       n_rows += expect_same_entries(mesh, cell_and_next{level});
                                       n_weighted += expect_same_entries(mesh, weighted_cell_and_next{level});
                                       n_grouped += expect_same_entries(mesh, grouped_cells{level});
+                                      n_late += expect_same_entries(mesh, grouped_cells_emitted_late{level});
+                                      EXPECT_EQ(seen(mesh, grouped_cells_emitted_late{level}), seen(mesh, grouped_cells{level}));
                                   }
                                   // the comparisons above had entries to compare
                                   EXPECT_GT(n_rows, 0u);
                                   EXPECT_GT(n_weighted, 0u);
                                   EXPECT_GT(n_grouped, n_rows / 3); // some groups have cells in the pool
+                                  EXPECT_EQ(n_late, n_grouped);
                               });
     }
 
