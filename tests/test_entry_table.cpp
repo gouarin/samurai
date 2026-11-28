@@ -996,10 +996,8 @@ namespace samurai
                                   }
                                   std::ostringstream expected;
                                   expected << "storage index " << cell.index << " (level " << cell.level << ", i = " << cell.indices[0]
-                                           << ", index = ";
-                                  const auto described = detail::describe_cell(mesh, static_cast<std::size_t>(cell.index));
-                                  EXPECT_EQ(described.substr(0, expected.str().size()), expected.str());
-                                  EXPECT_NE(described.find(std::to_string(cell.indices[1])), std::string::npos);
+                                           << ", index = {" << cell.indices[1] << "})";
+                                  EXPECT_EQ(detail::describe_cell(mesh, static_cast<std::size_t>(cell.index)), expected.str());
                               });
                 EXPECT_GT(n_cells, 97u);
                 // an index that is no cell of the mesh
