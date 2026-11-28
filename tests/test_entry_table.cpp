@@ -436,6 +436,55 @@ namespace samurai
                               });
     }
 
+    // Two threads can update the ghosts of two fields that share a mesh, while
+    // the tables of the mesh are recorded.
+    TEST(entry_table, ghosts_of_fields_sharing_a_mesh_updated_from_two_threads)
+    {
+        static constexpr std::size_t dim = 2;
+        const WithEntryTables on(true);
+        // A new mesh each time: it has no table yet.
+        const auto make_mesh = []
+        {
+            auto config = mesh_config<dim>().min_level(2).max_level(6).disable_args_parse();
+            return mra::make_mesh(Box<double, dim>({0., 0.}, {1., 1.}), config);
+        };
+        const auto make_fields = [](const auto& mesh)
+        {
+            auto a = make_scalar_field<double>("a", mesh);
+            auto b = make_vector_field<double, 2>("b", mesh);
+            make_bc<Dirichlet<1>>(a, 0.);
+            make_bc<Neumann<1>>(b, 0., 0.);
+            fill_all(a, 0.1);
+            fill_all(b, 0.7);
+            return std::make_pair(std::move(a), std::move(b));
+        };
+
+        auto sequential_mesh          = make_mesh();
+        auto [a_expected, b_expected] = make_fields(sequential_mesh);
+        update_ghost_mr(a_expected);
+        update_ghost_mr(b_expected);
+
+        for (std::size_t repeat = 0; repeat < 10; ++repeat)
+        {
+            auto mesh   = make_mesh();
+            auto [a, b] = make_fields(mesh);
+            {
+                std::jthread with_a(
+                    [&a]
+                    {
+                        update_ghost_mr(a);
+                    });
+                std::jthread with_b(
+                    [&b]
+                    {
+                        update_ghost_mr(b);
+                    });
+            }
+            EXPECT_TRUE(same_bits(a, a_expected));
+            EXPECT_TRUE(same_bits(b, b_expected));
+        }
+    }
+
     namespace
     {
         // The ghosts filled through entries against the field operators they
