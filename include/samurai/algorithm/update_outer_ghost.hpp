@@ -229,7 +229,7 @@ namespace samurai
      * Project the B.C. from level+1 to level:
      * For projection ghost, we compute the average of its children,
      * and we do that layer by layer.
-     * For instance, if max_stencil_width = 3, then 3 fine boundary ghosts overlap 2 coarse ghosts.
+     * For instance, if the B.C. fills 3 ghost layers, then 3 fine boundary ghosts overlap 2 coarse ghosts.
      * Note that since we want to project the B.C. two levels down, it is done in two steps:
      * - the B.C. is projected onto the lower ghosts
      * - those lower ghosts are projected onto the even lower ghosts
@@ -241,8 +241,8 @@ namespace samurai
 
         if (level < mesh.max_level() && level >= (mesh.min_level() > 0 ? mesh.min_level() - 1 : 0))
         {
-            static constexpr std::size_t max_stencil_width = Field::mesh_t::config_t::max_stencil_width;
-            int max_coarse_layer = static_cast<int>(max_stencil_width % 2 == 0 ? max_stencil_width / 2 : (max_stencil_width + 1) / 2);
+            const int n_bc_ghosts      = detail::bc_ghost_layers(field);
+            const int max_coarse_layer = (n_bc_ghosts + 1) / 2;
 
             for_each_cartesian_direction<Field::dim>(
                 [&](auto direction_index, const auto& direction)
@@ -633,7 +633,7 @@ namespace samurai
                         // Project the B.C. from level+1 to level:
                         // For projection ghost, we compute the average of its children,
                         // and we do that layer by layer.
-                        // For instance, if max_stencil_width = 3, then 3 fine boundary ghosts overlap 2 coarse ghosts.
+                        // For instance, if the B.C. fills 3 ghost layers, then 3 fine boundary ghosts overlap 2 coarse ghosts.
                         // Note that since we want to project the B.C. two levels down, it is done in two steps:
                         // - the B.C. is projected onto the lower ghosts
                         // - those lower ghosts are projected onto the even lower ghosts
