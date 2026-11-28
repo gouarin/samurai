@@ -723,216 +723,17 @@ namespace samurai
         }
     }
 
-    namespace
-    {
-        // The direct walk of a key gives the entries of its set expression, in
-        // the same order, and does not give up. Returns the number of entries.
-        template <class Mesh, class Key>
-        std::size_t expect_walk_matches_traversal(const Mesh& mesh, const Key& key, const char* what)
-        {
-            using entry_t = typename Key::entry_type;
-            detail::EntryTable<entry_t> walked;
-            detail::EntryRecorder<entry_t> recorder(walked);
-            EXPECT_TRUE(key.walk(mesh, recorder)) << what << " gave up at level " << key.level;
-            const auto traversed = detail::record_entries(mesh, key, false);
-            EXPECT_EQ(walked.entries.size(), traversed.entries.size()) << what << " at level " << key.level;
-            if (walked.entries.size() == traversed.entries.size() && !walked.entries.empty())
-            {
-                EXPECT_EQ(std::memcmp(walked.entries.data(), traversed.entries.data(), walked.entries.size() * sizeof(entry_t)), 0)
-                    << what << " at level " << key.level;
-            }
-            EXPECT_EQ(walked.pool, traversed.pool) << what << " at level " << key.level;
-            return traversed.entries.size();
-        }
-
-        // What the adapted mesh is refined around.
-        enum class Refined
-        {
-            corner_blob, // a blob that reaches a corner of the domain
-            front,       // a front normal to x, that crosses the boundaries along x
-        };
-
-        template <std::size_t dim>
-        void check_walks(int stencil_radius, Refined refined = Refined::corner_blob)
-        {
-            const std::size_t max_level = dim == 3 ? 5 : 7;
-            auto config                 = mesh_config<dim>().min_level(2).max_level(max_level).max_stencil_radius(stencil_radius);
-            if (refined == Refined::corner_blob)
-            {
-                config.disable_minimal_ghost_width();
-            }
-            auto mesh = mra::make_mesh(Box<double, dim>(xt::zeros<double>({dim}), xt::ones<double>({dim})), config);
-
-            // in both cases, the levels change along the boundary
-            auto u = make_scalar_field<double>("u", mesh);
-            for_each_cell(mesh,
-                          [&](const auto& cell)
-                          {
-                              if (refined == Refined::front)
-                              {
-                                  u[cell] = std::tanh(100 * (cell.center(0) - 0.5));
-                                  return;
-                              }
-                              double r2 = 0;
-                              for (std::size_t d = 0; d < dim; ++d)
-                              {
-                                  r2 += (cell.center(d) - 0.15) * (cell.center(d) - 0.15);
-                              }
-                              u[cell] = std::tanh(50 * (std::sqrt(r2) - 0.2));
-                          });
-            make_bc<Neumann<1>>(u, 0.);
-            make_MRAdapt(u)(mra_config().epsilon(1e-3));
-
-            const auto& adapted    = u.mesh();
-            const auto ghost_width = static_cast<std::size_t>(adapted.ghost_width());
-            ASSERT_GE(ghost_width, static_cast<std::size_t>(stencil_radius));
-
-            std::size_t n_projection      = 0;
-            std::size_t n_prediction      = 0;
-            std::size_t n_at_cells        = 0;
-            std::size_t n_corner_copies   = 0;
-            std::size_t n_corner_diagonal = 0;
-            std::size_t n_corner_others   = 0;
-            const std::size_t lowest      = adapted.min_level() - 1;
-            for (std::size_t level = lowest; level <= adapted.max_level(); ++level)
-            {
-                for_each_cartesian_direction<dim>(
-                    [&](const auto& direction)
-                    {
-                        const auto dir = direction_code<dim>(direction);
-                        for (std::size_t layer = 1; layer <= ghost_width; ++layer)
-                        {
-                            if (level < adapted.max_level() && layer <= (ghost_width + 1) / 2)
-                            {
-                                n_projection += expect_walk_matches_traversal(adapted,
-                                                                              detail::bc_projection_ghosts<dim>{level, dir, layer, 0},
-                                                                              "project_bc");
-                            }
-                            if (level > adapted.min_level())
-                            {
-                                n_prediction += expect_walk_matches_traversal(adapted,
-                                                                              detail::bc_prediction_ghosts<dim>{level, dir, layer, 0},
-                                                                              "predict_bc");
-                            }
-                            if (level < adapted.min_level())
-                            {
-                                continue;
-                            }
-                            detail::for_each_extrapolated_ghost_layer(
-                                static_cast<int>(layer),
-                                static_cast<int>(layer),
-                                [&](auto stencil_size_, std::size_t)
-                                {
-                                    static constexpr std::size_t size = decltype(stencil_size_)::value;
-                                    n_at_cells += expect_walk_matches_traversal(
-                                        adapted,
-                                        detail::extrapolated_ghosts_at_cells<dim, size>{level, dir, layer},
-                                        "extrapolation at cells");
-                                    if (layer > 1)
-                                    {
-                                        expect_walk_matches_traversal(
-                                            adapted,
-                                            detail::extrapolated_ghosts_at_inner_ghosts<dim, size>{level, dir, layer},
-                                            "extrapolation at inner ghosts");
-                                    }
-                                });
-                        }
-                    });
-                if constexpr (dim > 1)
-                {
-                    if (level < adapted.min_level())
-                    {
-                        continue;
-                    }
-                    for_each_diagonal_direction<dim>(
-                        [&](const auto& direction)
-                        {
-                            const auto dir = direction_code<dim>(direction);
-                            n_corner_copies += expect_walk_matches_traversal(adapted,
-                                                                             detail::corner_ghosts_below<dim>{level, dir},
-                                                                             "corner copies");
-                            n_corner_others += expect_walk_matches_traversal(adapted,
-                                                                             detail::corner_off_diagonal_ghosts<dim>{level, dir},
-                                                                             "off-diagonal corner ghosts");
-                            for (std::size_t layer = 1; layer <= ghost_width; ++layer)
-                            {
-                                if (2 * layer <= detail::max_stencil_size_implemented_PE)
-                                {
-                                    dispatch_static<1, detail::max_stencil_size_implemented_PE / 2>(
-                                        layer,
-                                        [&](auto layer_)
-                                        {
-                                            static constexpr std::size_t size = 2 * decltype(layer_)::value;
-                                            n_corner_diagonal += expect_walk_matches_traversal(
-                                                adapted,
-                                                detail::corner_diagonal_ghosts<dim, size>{level, dir, layer},
-                                                "diagonal corner ghosts");
-                                        });
-                                }
-                                else
-                                {
-                                    n_corner_diagonal += expect_walk_matches_traversal(
-                                        adapted,
-                                        detail::corner_diagonal_ghosts<dim, 2>{level, dir, layer},
-                                        "mirrored diagonal corner ghosts");
-                                }
-                            }
-                        });
-                }
-            }
-            // the comparisons above had entries to compare
-            EXPECT_GT(n_projection, 0u);
-            EXPECT_GT(n_at_cells, 0u);
-            // predict_bc has ghosts to fill where a front crosses the boundary: next to a coarser boundary cell
-            if (dim > 1 && refined == Refined::front)
-            {
-                EXPECT_GT(n_prediction, 0u);
-            }
-            if constexpr (dim > 1)
-            {
-                EXPECT_GT(n_corner_copies, 0u);
-                EXPECT_GT(n_corner_diagonal, 0u);
-                // with one ghost layer, the corner block is its diagonal ghost
-                EXPECT_EQ(n_corner_others > 0, ghost_width > 1);
-            }
-        }
-    }
-
-    TEST(entry_table, walks_same_entries_as_set_traversal_1d)
-    {
-        check_walks<1>(3);
-    }
-
-    TEST(entry_table, walks_same_entries_as_set_traversal_2d)
-    {
-        check_walks<2>(1);
-        check_walks<2>(3);
-        check_walks<2>(4); // the diagonal corner ghost of the layer 4 is mirrored
-        check_walks<2>(2, Refined::front);
-        check_walks<2>(3, Refined::front);
-    }
-
-    TEST(entry_table, walks_same_entries_as_set_traversal_3d)
-    {
-        check_walks<3>(2);
-        check_walks<3>(2, Refined::front);
-    }
-
-    // The keys where there is nothing to emit, and the walks that give up.
-    TEST(entry_table, empty_and_refused_walks)
+    // The keys where there is nothing to emit.
+    TEST(entry_table, keys_with_nothing_to_emit)
     {
         static constexpr std::size_t dim = 2;
         auto config                      = mesh_config<dim>().min_level(3).max_level(3).max_stencil_radius(2);
         const auto mesh                  = mra::make_mesh(Box<double, dim>({0., 0.}, {1., 1.}), config);
-        using mesh_t                     = std::remove_cvref_t<decltype(mesh)>;
-        using mesh_id_t                  = typename mesh_t::mesh_id_t;
-        using lca_t                      = typename mesh_t::lca_type;
         const DirectionVector<dim> diagonal{1, 1};
         const DirectionVector<dim> cartesian{1, 0};
 
         // no corner ghost below the level 0
         const detail::corner_ghosts_below<dim> below_level_0{0, direction_code<dim>(diagonal)};
-        EXPECT_TRUE(detail::record_entries(mesh, below_level_0, false).entries.empty());
         EXPECT_TRUE(detail::record_entries(mesh, below_level_0).entries.empty());
 
         // a cartesian direction has no off-diagonal ghost
@@ -951,30 +752,6 @@ namespace samurai
                                                       ++n_offsets;
                                                   });
         EXPECT_EQ(n_offsets, 2u); // one per layer
-
-        // blocks: an empty array is not a block, and a block does not hold what sticks out of it
-        EXPECT_FALSE(detail::as_block(lca_t(2)).has_value());
-        const auto& cells = mesh[mesh_id_t::cells][3]; // the uniform mesh
-        const auto block  = detail::as_block(cells);
-        ASSERT_TRUE(block.has_value());
-        EXPECT_TRUE(detail::block_holds(*block, cells));
-        EXPECT_FALSE(detail::block_holds(detail::translate(*block, cartesian), cells));
-        EXPECT_FALSE(detail::cell_index(cells, {block->hi[0], block->lo[1]}) >= 0);
-        EXPECT_TRUE(detail::cell_index(cells, {block->lo[0], block->lo[1]}) >= 0);
-
-        // the corner is only known up to its own level
-        EXPECT_TRUE(detail::corner_block(mesh, diagonal, mesh.corner(diagonal).level()).has_value());
-        EXPECT_FALSE(detail::corner_block(mesh, diagonal, mesh.corner(diagonal).level() + 1).has_value());
-
-        // so the walks of the corner keys give up there
-        const auto too_fine = mesh.corner(diagonal).level() + 1;
-        const auto dir      = direction_code<dim>(diagonal);
-        detail::EntryTable<Cells<2>> walked;
-        detail::EntryRecorder<Cells<2>> recorder(walked);
-        EXPECT_FALSE((detail::corner_ghosts_below<dim>{too_fine, dir}).walk(mesh, recorder));
-        EXPECT_FALSE((detail::corner_diagonal_ghosts<dim, 2>{too_fine, dir, 1}).walk(mesh, recorder));
-        EXPECT_FALSE((detail::corner_off_diagonal_ghosts<dim>{too_fine, dir}).walk(mesh, recorder));
-        EXPECT_TRUE(walked.entries.empty());
     }
 
     // The NaN checks of project_bc and predict_bc name a cell by its level and
@@ -1067,9 +844,9 @@ namespace samurai
         check_outer_ghost_entries<3>(true);
     }
 
-    // On a domain with a hole, no walk applies and the ghosts the B.C. fills in
-    // other directions are left out of project_bc and predict_bc: the tables,
-    // recorded from the set expressions, give the same bits as no table.
+    // On a domain with a hole, the ghosts the B.C. fills in other directions
+    // are left out of project_bc and predict_bc: the tables give the same bits
+    // as no table.
     TEST(entry_table, outer_ghosts_same_with_and_without_tables_hole)
     {
 #ifdef SAMURAI_WITH_MPI
@@ -1092,7 +869,6 @@ namespace samurai
 
         const auto& adapted = u.mesh();
         ASSERT_FALSE(adapted.domain().is_box());
-        EXPECT_FALSE(detail::box_domain_block(adapted, adapted.max_level(), false).has_value());
 
         auto s = make_scalar_field<double>("s", u.mesh());
         auto v = make_vector_field<double, 3>("v", u.mesh());
@@ -1115,7 +891,7 @@ namespace samurai
         EXPECT_EQ(whole_s[0], whole_s[1]);
         EXPECT_EQ(whole_v[0], whole_v[1]);
 
-        // the keys carry the B.C. ghosts left out, and their walks give up
+        // the keys carry the B.C. ghosts left out
         std::size_t n_projection = 0;
         for (std::size_t level = adapted.min_level() - 1; level < adapted.max_level(); ++level)
         {
@@ -1123,9 +899,6 @@ namespace samurai
                 [&](const auto& direction)
                 {
                     const detail::bc_projection_ghosts<dim> key{level, direction_code<dim>(direction), 1, 1};
-                    detail::EntryTable<detail::BcProjectionEntry> walked;
-                    detail::EntryRecorder<detail::BcProjectionEntry> recorder(walked);
-                    EXPECT_FALSE(key.walk(adapted, recorder));
                     n_projection += detail::record_entries(adapted, key).entries.size();
                 });
         }

@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "../algorithm/cell_block.hpp"
 #include "../boundary.hpp"
 #include "../entry_table.hpp"
 #include "../field/concepts.hpp"
@@ -479,99 +478,6 @@ namespace samurai
         }
 
         //////////////////////////////////////////////////////////////////////
-        // Direct walks
-        //////////////////////////////////////////////////////////////////////
-
-        // What a set expression checks before laying a stencil.
-        enum class CheckedCells
-        {
-            all,   // every stencil cell is in the reference mesh
-            ghost, // the ghost to fill, the last cell, is in the reference mesh
-            none,
-        };
-
-        template <std::size_t size, std::size_t dim>
-        std::array<DirectionVector<dim>, size> stencil_offsets(const Stencil<size, dim>& stencil)
-        {
-            std::array<DirectionVector<dim>, size> offsets;
-            for (std::size_t k = 0; k < size; ++k)
-            {
-                for (std::size_t d = 0; d < dim; ++d)
-                {
-                    offsets[k][d] = stencil(k, d);
-                }
-            }
-            return offsets;
-        }
-
-        // Emits the stencils laid on the cells [start, end) of the row of `coords`, their cells read in `ref`.
-        // Returns false when a stencil cell is missing where the set expression does not check it.
-        template <class LCA, std::size_t size, class Emit>
-        bool emit_row_stencils(const LCA& ref,
-                               const std::array<typename LCA::value_t, LCA::dim>& coords,
-                               typename LCA::value_t start,
-                               typename LCA::value_t end,
-                               const std::array<DirectionVector<LCA::dim>, size>& stencil,
-                               CheckedCells checked,
-                               Emit& emit)
-        {
-            auto rows_of_stencil = [&]<std::size_t... k>(std::index_sequence<k...>)
-            {
-                return std::array<RowLookup<LCA>, size>{RowLookup<LCA>(ref, translate(coords, stencil[k]))...};
-            }(std::make_index_sequence<size>{});
-
-            Cells<size> indices;
-            for (auto x = start; x < end; ++x)
-            {
-                bool missing_ghost = false;
-                bool missing_other = false;
-                for (std::size_t k = 0; k < size; ++k)
-                {
-                    const auto index = rows_of_stencil[k](x + stencil[k][0]);
-                    if (index < 0)
-                    {
-                        (k == size - 1 ? missing_ghost : missing_other) = true;
-                    }
-                    else
-                    {
-                        indices[k] = static_cast<std::size_t>(index);
-                    }
-                }
-                if ((checked == CheckedCells::all && (missing_ghost || missing_other)) || (checked == CheckedCells::ghost && missing_ghost))
-                {
-                    continue;
-                }
-                if (missing_ghost || missing_other)
-                {
-                    return false;
-                }
-                emit(indices);
-            }
-            return true;
-        }
-
-        // Emits the stencils laid on the cells of `level` in `block`.
-        template <class Mesh, std::size_t size, class Emit>
-        bool emit_block_stencils(const Mesh& mesh,
-                                 std::size_t level,
-                                 const CellBlock<typename Mesh::interval_t::value_t, Mesh::dim>& block,
-                                 const std::array<DirectionVector<Mesh::dim>, size>& stencil,
-                                 CheckedCells checked,
-                                 Emit& emit)
-        {
-            using mesh_id_t = typename Mesh::mesh_id_t;
-            bool done       = true;
-            for_each_interval_in_block(
-                mesh[mesh_id_t::cells][level],
-                block,
-                [&](auto start, auto end, const auto& coords, auto)
-                {
-                    done = done && emit_row_stencils(mesh[mesh_id_t::reference][level], coords, start, end, stencil, checked, emit);
-                });
-            return done;
-        }
-
-        //////////////////////////////////////////////////////////////////////
         // Keys
         //////////////////////////////////////////////////////////////////////
 
@@ -592,24 +498,6 @@ namespace samurai
                 const auto dir      = direction_from_code<dim>(direction);
                 auto boundary_cells = domain_boundary(mesh, level, dir);
                 emit_stencils_on_cells(mesh, level, dir, boundary_cells, extrapolation_stencil<stencil_size>(layer, dir), layer, emit);
-            }
-
-            // On a box domain that holds the cells, the boundary cells are those on its face.
-            template <class Mesh, class Emit>
-            bool walk(const Mesh& mesh, Emit& emit) const
-            {
-                const auto domain = box_domain_block(mesh, level, false);
-                if (!domain)
-                {
-                    return false;
-                }
-                const auto dir = direction_from_code<dim>(direction);
-                return emit_block_stencils(mesh,
-                                           level,
-                                           face_layer(*domain, dir, 0),
-                                           stencil_offsets(extrapolation_stencil<stencil_size>(layer, dir)),
-                                           layer == 1 ? CheckedCells::none : CheckedCells::ghost,
-                                           emit);
             }
         };
 
@@ -639,45 +527,6 @@ namespace samurai
                 auto inner_cells_and_ghosts           = intersection(potential_inner_cells_and_ghosts, mesh.get_union()[level]).on(level);
                 auto inner_ghosts_with_outer_nghbr    = difference(inner_cells_and_ghosts, mesh[mesh_id_t::cells][level]).on(level);
                 emit_stencils(mesh, inner_ghosts_with_outer_nghbr, stencil, emit);
-            }
-
-            // On a box domain that holds the cells and the union: the part of the union on its face that is not cells.
-            template <class Mesh, class Emit>
-            bool walk(const Mesh& mesh, Emit& emit) const
-            {
-                using mesh_id_t = typename Mesh::mesh_id_t;
-
-                const auto domain = box_domain_block(mesh, level, true);
-                if (!domain)
-                {
-                    return false;
-                }
-                const auto dir     = direction_from_code<dim>(direction);
-                const auto stencil = stencil_offsets(extrapolation_stencil<stencil_size>(layer, dir));
-                const auto& ref    = mesh[mesh_id_t::reference][level];
-                for_each_interval_in_block(mesh.get_union()[level],
-                                           face_layer(*domain, dir, 0),
-                                           [&](auto start, auto end, const auto& coords, auto)
-                                           {
-                                               const auto row = coords;
-                                               auto x         = start;
-                                               auto gap       = [&](auto gap_end)
-                                               {
-                                                   if (x < gap_end)
-                                                   {
-                                                       emit_row_stencils(ref, row, x, gap_end, stencil, CheckedCells::all, emit);
-                                                   }
-                                               };
-                                               for_each_interval_in_block(mesh[mesh_id_t::cells][level],
-                                                                          row_block(row, start, end),
-                                                                          [&](auto cells_start, auto cells_end, const auto&, auto)
-                                                                          {
-                                                                              gap(cells_start);
-                                                                              x = cells_end;
-                                                                          });
-                                               gap(end);
-                                           });
-                return true;
             }
         };
 
@@ -746,31 +595,6 @@ namespace samurai
                     }
                 }
                 emit_stencils_on_cells(mesh, level, dir, corner, extrapolation_stencil<stencil_size>(layer, dir), layer, emit);
-            }
-
-            template <class Mesh, class Emit>
-            bool walk(const Mesh& mesh, Emit& emit) const
-            {
-                const auto dir    = direction_from_code<dim>(direction);
-                const auto corner = corner_block(mesh, dir, level);
-                if (!corner)
-                {
-                    return false;
-                }
-                const auto checked = layer == 1 ? CheckedCells::none : CheckedCells::ghost;
-                if constexpr (stencil_size == 2)
-                {
-                    if (mirrored())
-                    {
-                        return emit_block_stencils(mesh,
-                                                   level,
-                                                   translate(*corner, to_inner_cell(dir)),
-                                                   stencil_offsets(mirror_stencil(dir)),
-                                                   checked,
-                                                   emit);
-                    }
-                }
-                return emit_block_stencils(mesh, level, *corner, stencil_offsets(extrapolation_stencil<stencil_size>(layer, dir)), checked, emit);
             }
         };
 
@@ -861,29 +685,6 @@ namespace samurai
                                                       xt::view(stencil, 1) = delta;
                                                       emit_stencils(mesh, source_at_k, stencil, emit);
                                                   });
-            }
-
-            template <class Mesh, class Emit>
-            bool walk(const Mesh& mesh, Emit& emit) const
-            {
-                const auto dir    = direction_from_code<dim>(direction);
-                const auto corner = corner_block(mesh, dir, level);
-                if (!corner)
-                {
-                    return false;
-                }
-                bool done = true;
-                for_each_off_diagonal_offset<dim>(dir,
-                                                  mesh.ghost_width(),
-                                                  [&](int k, const auto& delta)
-                                                  {
-                                                      std::array<DirectionVector<dim>, 2> stencil;
-                                                      stencil[0] = k * dir;
-                                                      stencil[1] = stencil[0] + delta;
-                                                      done       = done
-                                                          && emit_block_stencils(mesh, level, *corner, stencil, CheckedCells::none, emit);
-                                                  });
-                return done;
             }
         };
 
