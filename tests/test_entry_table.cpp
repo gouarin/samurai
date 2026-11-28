@@ -1126,6 +1126,46 @@ namespace samurai
         check_ghost_entries<3>(true);
     }
 
+    // project_bc(level, field) fills the layers update_outer_ghosts projects.
+    TEST(entry_table, project_bc_on_all_directions)
+    {
+        with_adapted_field<2>(false,
+                              [](auto& u)
+                              {
+                                  const auto& mesh = u.mesh();
+                                  auto by_level    = u;
+                                  auto by_layer    = u;
+                                  for (std::size_t level = mesh.max_level(); level-- > mesh.min_level() - 1;)
+                                  {
+                                      project_bc(level, by_level);
+                                      for_each_cartesian_direction<2>(
+                                          [&](const auto& direction)
+                                          {
+                                              project_bc(level, direction, 1, by_layer);
+                                          });
+                                  }
+                                  EXPECT_TRUE(same_bits(by_level, by_layer));
+                              });
+    }
+
+#ifndef NDEBUG
+    // The entries of update_ghost_mr are recorded on the mesh of its first
+    // field: a field on other cells is refused.
+    TEST(entry_table, fields_on_other_cells_refused)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        with_adapted_field<1>(false,
+                              [](auto& u)
+                              {
+                                  auto config = mesh_config<1>().min_level(2).max_level(7).max_stencil_size(2).disable_minimal_ghost_width();
+                                  auto other_mesh = mra::make_mesh(Box<double, 1>({0.}, {1.}), config);
+                                  auto v          = make_scalar_field<double>("v", other_mesh, 0.);
+                                  make_bc<Dirichlet<1>>(v, 0.);
+                                  EXPECT_DEATH(update_ghost_mr(u, v), "the fields of update_ghost_mr must have the same cells");
+                              });
+    }
+#endif
+
 #ifdef SAMURAI_CHECK_NAN
     // A NaN read by the polynomial extrapolation of the ghosts beyond those the
     // B.C. fills stops the run.
