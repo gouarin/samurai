@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <vector>
 
@@ -186,9 +187,11 @@ namespace samurai
         mpi::communicator world;
         const auto& neighbours = mesh.mpi_neighbourhood();
 #endif
+        // memmove: when the domain is narrower than the ghost width, a row and
+        // its image overlap.
         auto copy_images = [&](const auto& rows)
         {
-            std::copy(data + rows.at[1] * nc, data + (rows.at[1] + rows.len) * nc, data + rows.at[0] * nc);
+            std::memmove(data + rows.at[0] * nc, data + rows.at[1] * nc, rows.len * nc * sizeof(*data));
         };
         for (std::size_t d = 0; d < Field::dim; ++d)
         {
