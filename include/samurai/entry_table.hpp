@@ -30,7 +30,8 @@
 // - gives the type of the entries: `using entry_type = ...;`, any trivially
 //   copyable struct (Rows and Cells below cover the usual cases);
 // - holds, as members, everything the traversal depends on besides the mesh
-//   (level, direction, layer...). Two keys are the same when their bytes are, so
+//   (level, direction, layer...), or nothing when the traversal depends on the
+//   mesh only. Two keys are the same when their bytes are, so
 //   a key is trivially copyable and has no padding: members of one integer
 //   type, std::size_t for instance, and direction_code() for a direction;
 // - knows how to produce the entries, by traversing the set expression:
@@ -120,7 +121,7 @@ namespace samurai
             static_assert(requires { typename Key::entry_type; }, "an entry table key gives the type of its entries: using entry_type = ...;");
             static_assert(std::is_trivially_copyable_v<typename Key::entry_type>, "the entries of an entry table are trivially copyable");
             static_assert(
-                std::is_trivially_copyable_v<Key> && std::has_unique_object_representations_v<Key>,
+                std::is_trivially_copyable_v<Key> && (std::is_empty_v<Key> || std::has_unique_object_representations_v<Key>),
                 "an entry table key is compared through its bytes: trivially copyable, without padding (members of one integer type)");
         }
 
@@ -224,10 +225,17 @@ namespace samurai
             template <class Key>
             std::size_t operator()(const Key& key) const noexcept
             {
-                // A key has no padding (see check_entry_table_key), so its bytes
-                // are its value: hashed as a string of bytes by the standard library.
-                const auto bytes = std::bit_cast<std::array<char, sizeof(Key)>>(key);
-                return std::hash<std::string_view>{}(std::string_view(bytes.data(), bytes.size()));
+                if constexpr (std::is_empty_v<Key>)
+                {
+                    return 0; // a key without members: one table per mesh
+                }
+                else
+                {
+                    // A key has no padding (see check_entry_table_key), so its bytes
+                    // are its value: hashed as a string of bytes by the standard library.
+                    const auto bytes = std::bit_cast<std::array<char, sizeof(Key)>>(key);
+                    return std::hash<std::string_view>{}(std::string_view(bytes.data(), bytes.size()));
+                }
             }
         };
 
@@ -236,7 +244,14 @@ namespace samurai
             template <class Key>
             bool operator()(const Key& a, const Key& b) const noexcept
             {
-                return std::memcmp(&a, &b, sizeof(Key)) == 0;
+                if constexpr (std::is_empty_v<Key>)
+                {
+                    return true;
+                }
+                else
+                {
+                    return std::memcmp(&a, &b, sizeof(Key)) == 0;
+                }
             }
         };
 

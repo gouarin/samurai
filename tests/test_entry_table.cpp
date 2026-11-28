@@ -387,6 +387,32 @@ namespace samurai
                               });
     }
 
+    namespace
+    {
+        // A key without members: its set expression depends on the mesh only.
+        struct finest_cells_and_next
+        {
+            using entry_type = Rows<2>;
+
+            void produce(const auto& mesh, auto& emit) const
+            {
+                cell_and_next{mesh.max_level()}.produce(mesh, emit);
+            }
+        };
+    }
+
+    TEST(entry_table, key_without_members)
+    {
+        with_adapted_field<2>(false,
+                              [](auto& u)
+                              {
+                                  const auto& mesh = u.mesh();
+                                  EXPECT_GT(expect_same_entries(mesh, finest_cells_and_next{}), 0u);
+                                  const WithEntryTables on(true);
+                                  EXPECT_EQ(seen(mesh, finest_cells_and_next{}), seen(mesh, cell_and_next{mesh.max_level()}));
+                              });
+    }
+
     // Several threads can read the tables of one mesh, recorded on first use.
     TEST(entry_table, tables_read_from_several_threads)
     {
