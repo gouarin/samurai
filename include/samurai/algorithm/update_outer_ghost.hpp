@@ -15,6 +15,7 @@
 #include "../algorithm.hpp"
 #include "../bc/apply_field_bc.hpp"
 #include "../entry_table.hpp"
+#include "cell_block.hpp"
 
 namespace samurai
 {
@@ -118,6 +119,57 @@ namespace samurai
                             emit(entry);
                         }
                     });
+            }
+
+            // Same entries by walking the union on the face of a box
+            // domain, moved `layer` cells out.
+            template <class Mesh, class Emit>
+            bool walk(const Mesh& mesh, Emit& emit) const
+            {
+                using mesh_id_t = typename Mesh::mesh_id_t;
+
+                const auto domain = n_left_out == 0 ? box_domain_block(mesh, level, true) : std::nullopt;
+                if (!domain)
+                {
+                    return false;
+                }
+                const auto dir                 = direction_from_code<dim>(direction);
+                const auto& ref                = mesh[mesh_id_t::reference];
+                const DirectionVector<dim> out = static_cast<int>(layer) * dir;
+                for_each_interval_in_block(
+                    mesh.get_union()[level],
+                    face_layer(*domain, dir, 0),
+                    [&](auto start, auto end, const auto& coords, auto)
+                    {
+                        for_each_interval_in_block(
+                            ref[level],
+                            translate(row_block(coords, start, end), out),
+                            [&](auto ghost_start, auto ghost_end, const auto& ghost_coords, auto shift)
+                            {
+                                auto ghost = ghost_coords;
+                                for (auto x = ghost_start; x < ghost_end; ++x)
+                                {
+                                    ghost[0] = x;
+                                    BcProjectionEntry entry{static_cast<std::size_t>(x + shift), emit.new_range()};
+                                    // the children at level + 1 or, when there are none, at level + 2
+                                    for (std::size_t delta_l = 1; delta_l <= 2 && entry.children.count == 0; ++delta_l)
+                                    {
+                                        for_each_interval_in_block(
+                                            ref[level + delta_l],
+                                            refine(cell_block(ghost), delta_l),
+                                            [&](auto child_start, auto child_end, const auto&, auto child_shift)
+                                            {
+                                                for (auto c = child_start; c < child_end; ++c)
+                                                {
+                                                    emit.add(entry.children, static_cast<std::size_t>(c + child_shift));
+                                                }
+                                            });
+                                    }
+                                    emit(entry);
+                                }
+                            });
+                    });
+                return true;
             }
         };
 
@@ -250,6 +302,72 @@ namespace samurai
                         }
                     });
             }
+
+            // Same entries by walking the ghosts in the n_layers layers outside
+            // the face of a box domain: those whose parent, brought back onto
+            // the face, is a cell at level - 1.
+            template <class Mesh, class Emit>
+            bool walk(const Mesh& mesh, Emit& emit) const
+            {
+                using mesh_id_t = typename Mesh::mesh_id_t;
+
+                const auto coarse_domain = n_left_out == 0 ? box_domain_block(mesh, level - 1, false) : std::nullopt;
+                if (!coarse_domain)
+                {
+                    return false;
+                }
+                const auto dir = direction_from_code<dim>(direction);
+                // the layers 1 to n_layers outside the face, and the cells on the face
+                auto layers      = face_layer(*coarse_domain, dir, 1);
+                std::size_t axis = 0;
+                for (std::size_t d = 0; d < dim; ++d)
+                {
+                    if (dir[d] != 0)
+                    {
+                        axis = d;
+                    }
+                }
+                const auto further = static_cast<typename Mesh::interval_t::value_t>(n_layers) - 1;
+                (dir[axis] > 0 ? layers.hi[axis] : layers.lo[axis]) += dir[axis] > 0 ? further : -further;
+                const auto face = dir[axis] > 0 ? coarse_domain->hi[axis] - 1 : coarse_domain->lo[axis];
+
+                const auto& ref   = mesh[mesh_id_t::reference];
+                const auto& cells = mesh[mesh_id_t::cells][level - 1];
+                bool found        = true;
+                for_each_interval_in_block(
+                    ref[level],
+                    refine(layers, 1),
+                    [&](auto start, auto end, const auto& coords, auto shift)
+                    {
+                        auto parent_coords = coords;
+                        std::transform(coords.begin(),
+                                       coords.end(),
+                                       parent_coords.begin(),
+                                       [](auto c)
+                                       {
+                                           return c >> 1;
+                                       });
+                        auto on_face  = parent_coords;
+                        on_face[axis] = face;
+                        RowLookup parents(ref[level - 1], parent_coords);
+                        RowLookup boundary_cells(cells, on_face);
+                        for (auto x = start; x < end && found; ++x)
+                        {
+                            const auto coarse_x = x >> 1;
+                            if (boundary_cells(axis == 0 ? face : coarse_x) < 0)
+                            {
+                                continue;
+                            }
+                            const auto parent = parents(coarse_x);
+                            found             = parent >= 0;
+                            if (found)
+                            {
+                                emit(entry_type{static_cast<std::size_t>(parent), static_cast<std::size_t>(x + shift)});
+                            }
+                        }
+                    });
+                return found;
+            }
         };
 
         // The corner ghosts at level - 1 and level - 2 below the corner ghosts
@@ -326,6 +444,69 @@ namespace samurai
                         break;
                     }
                 }
+            }
+
+            // Same entries by walking the reference mesh around the corner block.
+            template <class Mesh, class Emit>
+            bool walk(const Mesh& mesh, Emit& emit) const
+            {
+                using mesh_id_t = typename Mesh::mesh_id_t;
+
+                if (level == 0)
+                {
+                    return true;
+                }
+                const auto dir    = direction_from_code<dim>(direction);
+                const auto corner = corner_block(mesh, dir, level);
+                if (!corner)
+                {
+                    return false;
+                }
+                const auto& ref        = mesh[mesh_id_t::reference];
+                const auto outer_ghost = translate(*corner, dir);
+                for (std::size_t delta_l = 1; delta_l <= 2; ++delta_l)
+                {
+                    const auto proj_level = level - delta_l;
+                    for_each_interval_in_block(
+                        ref[proj_level],
+                        coarsen(outer_ghost, delta_l),
+                        [&](auto start, auto end, const auto& coords, auto shift)
+                        {
+                            auto ghost = coords;
+                            for (auto x = start; x < end; ++x)
+                            {
+                                ghost[0] = x;
+                                // a coarse ghost has a child in the outer corner ghosts at `level`
+                                bool has_child = false;
+                                for_each_interval_in_block(ref[level],
+                                                           intersect(refine(cell_block(ghost), delta_l), outer_ghost),
+                                                           [&](auto, auto, const auto&, auto)
+                                                           {
+                                                               has_child = true;
+                                                           });
+                                if (!has_child)
+                                {
+                                    continue;
+                                }
+                                // copied from its corner-most child when it exists
+                                auto child = ghost;
+                                for (std::size_t d = 0; d < dim; ++d)
+                                {
+                                    child[d] = (ghost[d] << delta_l) + (dir[d] == -1 ? ((1 << delta_l) - 1) : 0);
+                                }
+                                const auto src = cell_index(ref[level], child);
+                                if (src >= 0)
+                                {
+                                    emit(entry_type{static_cast<std::size_t>(src), static_cast<std::size_t>(x + shift)});
+                                }
+                            }
+                        });
+                    if (proj_level == 0)
+                    {
+                        break;
+                    }
+                }
+                return true;
             }
         };
     }

@@ -68,6 +68,12 @@
 //     {
 //         for (const auto index : samurai::cells_of(pool, entry.cells)) { ... }
 //     }
+//
+// A key can also give its entries by a direct walk of the mesh, cheaper than
+// the set expression but allowed to give up:
+//     bool walk(const Mesh& mesh, Emit& emit) const; // false: use produce()
+// It must emit the entries of produce(), in the same order. It is only used to
+// record a table.
 namespace samurai
 {
     // N rows of `len` consecutive cells, each given by the storage index of its first cell.
@@ -249,12 +255,26 @@ namespace samurai
             }
         };
 
-        // The entries of `key` on `mesh`, from its set expression.
+        template <class Key, class Mesh>
+        concept walkable_key = requires(const Key& key, const Mesh& mesh, EntryRecorder<typename Key::entry_type>& recorder) {
+            { key.walk(mesh, recorder) } -> std::convertible_to<bool>;
+        };
+
+        // The entries of `key` on `mesh`: from the walk of the key when it has
+        // one, `by_walk` allows it and it succeeds, from its set expression otherwise.
         template <class Mesh, class Key>
-        auto record_entries(const Mesh& mesh, const Key& key)
+        auto record_entries(const Mesh& mesh, const Key& key, bool by_walk = true)
         {
             EntryTable<typename Key::entry_type> table;
             EntryRecorder<typename Key::entry_type> recorder(table);
+            if constexpr (walkable_key<Key, Mesh>)
+            {
+                if (by_walk && key.walk(mesh, recorder))
+                {
+                    return table;
+                }
+                table = {};
+            }
             key.produce(mesh, recorder);
             return table;
         }
