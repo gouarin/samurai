@@ -34,7 +34,9 @@
 //     accumulate at corners — hence the subdomain -> periodic -> dim ordering.
 
 #include <algorithm>
+#include <cassert>
 #include <iterator>
+#include <type_traits>
 #include <vector>
 
 #include "../algorithm.hpp"
@@ -192,9 +194,26 @@ namespace samurai::detail
     // field-merged and non-blocking. The periodic exchange keeps its
     // per-dimension ordering (see header note) by delegating to
     // update_ghost_periodic.
+    // Whether two meshes have the same cells, hence the same storage indices.
+    template <class Mesh, class OtherMesh>
+    bool same_cells(const Mesh& mesh, const OtherMesh& other)
+    {
+        if constexpr (std::is_same_v<Mesh, OtherMesh>)
+        {
+            return &mesh == &other || mesh == other;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
     template <class Field, class... Fields>
     void update_ghost_mr_aggregated(Field& field, Fields&... other_fields)
     {
+        // The entries are recorded on the mesh of `field` and applied to every field.
+        assert((same_cells(field.mesh(), other_fields.mesh()) && ...) && "the fields of update_ghost_mr must have the same cells");
+
         constexpr std::size_t dim        = Field::dim;
         constexpr std::size_t pred_order = Field::mesh_t::config_t::prediction_stencil_radius;
         // the kernels, on every field

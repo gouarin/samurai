@@ -1,4 +1,6 @@
 #pragma once
+#include <cassert>
+
 #include "indices.hpp"
 #include "static_algorithm.hpp"
 
@@ -19,6 +21,7 @@ namespace samurai
         std::size_t base = 1;
         for (std::size_t d = 0; d < dim; ++d)
         {
+            assert(direction[d] >= -1 && direction[d] <= 1 && "a direction has its components in {-1, 0, 1}");
             code += static_cast<std::size_t>(direction[d] + 1) * base;
             base *= 3;
         }
