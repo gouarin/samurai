@@ -19,6 +19,9 @@
 #include <type_traits>
 
 #include <fmt/format.h>
+#ifdef SAMURAI_WITH_MPI
+#include <boost/mpi.hpp>
+#endif
 #include <stdexcept>
 
 namespace samurai
@@ -918,6 +921,10 @@ namespace samurai
             {
                 if (std::isnan(field.data()[source * Field::n_comp + c]))
                 {
+#ifdef SAMURAI_WITH_MPI
+                    boost::mpi::communicator world;
+                    std::cerr << "[" << world.rank() << "] ";
+#endif
                     std::cerr << "NaN found in the cell of " << describe_cell(field.mesh(), source) << " during the " << what
                               << " into the ghost of " << describe_cell(field.mesh(), ghost) << std::endl;
                     std::exit(1);
