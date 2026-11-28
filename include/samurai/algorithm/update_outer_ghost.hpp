@@ -53,47 +53,6 @@ namespace samurai
             }
         }
 
-        // The level and the coordinates of the cell stored at `storage_index`, for an error message.
-        template <class Mesh>
-        std::string describe_cell(const Mesh& mesh, std::size_t storage_index)
-        {
-            using mesh_id_t = typename Mesh::mesh_id_t;
-            std::ostringstream where;
-            where << "storage index " << storage_index;
-            for_each_interval(mesh[mesh_id_t::reference],
-                              [&](std::size_t level, const auto& i, const auto& index)
-                              {
-                                  const auto first = static_cast<std::size_t>(i.index + i.start);
-                                  if (storage_index >= first && storage_index < first + i.size())
-                                  {
-                                      where << " (level " << level
-                                            << ", i = " << i.start + static_cast<decltype(i.start)>(storage_index - first)
-                                            << ", index = " << index << ")";
-                                  }
-                              });
-            return where.str();
-        }
-
-        // Stops on a NaN read in `source` to fill `ghost`, under SAMURAI_CHECK_NAN.
-        template <class Field>
-        void stop_on_nan([[maybe_unused]] const Field& field,
-                         [[maybe_unused]] std::size_t source,
-                         [[maybe_unused]] std::size_t ghost,
-                         [[maybe_unused]] const char* what)
-        {
-#ifdef SAMURAI_CHECK_NAN
-            for (std::size_t c = 0; c < Field::n_comp; ++c)
-            {
-                if (std::isnan(field.data()[source * Field::n_comp + c]))
-                {
-                    std::cerr << "NaN found in the cell of " << describe_cell(field.mesh(), source) << " during the " << what
-                              << " of the B.C. into the ghost of " << describe_cell(field.mesh(), ghost) << std::endl;
-                    std::exit(1);
-                }
-            }
-#endif
-        }
-
         // A ghost outside the domain and its children in the reference mesh.
         struct BcProjectionEntry
         {
@@ -224,7 +183,7 @@ namespace samurai
             const auto children      = cells_of(pool, entry.children);
             for (const auto child : children)
             {
-                stop_on_nan(field, child, entry.ghost, "projection");
+                stop_on_nan(field, child, entry.ghost, "projection of the B.C.");
             }
             for (std::size_t c = 0; c < nc; ++c)
             {
@@ -566,7 +525,7 @@ namespace samurai
                        detail::bc_prediction_ghosts<Field::dim>{pred_level, dir, n_layers, n_left_out},
                        [&](const auto& cells)
                        {
-                           detail::stop_on_nan(field, cells[0], cells[1], "prediction");
+                           detail::stop_on_nan(field, cells[0], cells[1], "prediction of the B.C.");
                            detail::extrapolate_cells(field, cells);
                        });
     }
@@ -577,9 +536,14 @@ namespace samurai
     template <class Field>
     void project_corner_below(std::size_t level, const DirectionVector<Field::dim>& direction, Field& field)
     {
+        // A plain copy, left unchecked for NaN: the corner ghost it reads is
+        // not always filled at this point (seen on adapted 3D meshes).
         for_each_entry(field.mesh(),
                        detail::corner_ghosts_below<Field::dim>{level, direction_code<Field::dim>(direction)},
-                       detail::extrapolation_of(field));
+                       [&](const auto& cells)
+                       {
+                           detail::extrapolate_cells(field, cells);
+                       });
     }
 
     // Field projection of the corner ghosts at `level` to level-1 and level-2,

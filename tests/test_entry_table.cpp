@@ -1125,4 +1125,36 @@ namespace samurai
         check_ghost_entries<3>(false);
         check_ghost_entries<3>(true);
     }
+
+#ifdef SAMURAI_CHECK_NAN
+    // A NaN read by the polynomial extrapolation of the ghosts beyond those the
+    // B.C. fills stops the run.
+    TEST(entry_table, nan_read_by_polynomial_extrapolation_stops)
+    {
+#ifdef SAMURAI_WITH_MPI
+        GTEST_SKIP() << "death test";
+#endif
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        for (const bool tables : {true, false})
+        {
+            EXPECT_EXIT(
+                {
+                    const WithEntryTables with(tables);
+                    static constexpr std::size_t dim = 2;
+                    const std::size_t level          = 3;
+                    auto config = mesh_config<dim>().min_level(level).max_level(level).max_stencil_radius(2).disable_args_parse();
+                    auto mesh   = mra::make_mesh(Box<double, dim>({0., 0.}, {1., 1.}), config);
+                    auto u      = make_scalar_field<double>("u", mesh);
+                    make_bc<Neumann<1>>(u, 0.);
+                    fill_all(u, 0.3);
+                    u.data()[memory_offset(mesh, {level, 6, 3})] = std::nan("");
+                    update_ghost_mr(u);
+                    std::exit(0);
+                },
+                testing::ExitedWithCode(1),
+                "NaN found in the cell of .* during the polynomial extrapolation into the ghost of")
+                << "with tables: " << tables;
+        }
+    }
+#endif
 }

@@ -10,6 +10,13 @@
 #include "../static_dispatch.hpp"
 #include "polynomial_extrapolation.hpp"
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <tuple>
+#include <type_traits>
 
 #include <fmt/format.h>
 #include <stdexcept>
@@ -877,6 +884,48 @@ namespace samurai
             }
         };
 
+        // The level and the coordinates of the cell stored at `storage_index`, for an error message.
+        template <class Mesh>
+        std::string describe_cell(const Mesh& mesh, std::size_t storage_index)
+        {
+            using mesh_id_t = typename Mesh::mesh_id_t;
+            std::ostringstream where;
+            where << "storage index " << storage_index;
+            for_each_interval(mesh[mesh_id_t::reference],
+                              [&](std::size_t level, const auto& i, const auto& index)
+                              {
+                                  const auto first = static_cast<std::size_t>(i.index + i.start);
+                                  if (storage_index >= first && storage_index < first + i.size())
+                                  {
+                                      where << " (level " << level
+                                            << ", i = " << i.start + static_cast<decltype(i.start)>(storage_index - first)
+                                            << ", index = " << index << ")";
+                                  }
+                              });
+            return where.str();
+        }
+
+        // Stops on a NaN read in `source` to fill `ghost`, under SAMURAI_CHECK_NAN.
+        // `what` names the step, for the message: "projection of the B.C.", ...
+        template <class Field>
+        void stop_on_nan([[maybe_unused]] const Field& field,
+                         [[maybe_unused]] std::size_t source,
+                         [[maybe_unused]] std::size_t ghost,
+                         [[maybe_unused]] const char* what)
+        {
+#ifdef SAMURAI_CHECK_NAN
+            for (std::size_t c = 0; c < Field::n_comp; ++c)
+            {
+                if (std::isnan(field.data()[source * Field::n_comp + c]))
+                {
+                    std::cerr << "NaN found in the cell of " << describe_cell(field.mesh(), source) << " during the " << what
+                              << " into the ghost of " << describe_cell(field.mesh(), ghost) << std::endl;
+                    std::exit(1);
+                }
+            }
+#endif
+        }
+
         // Same arithmetic as PolynomialExtrapolation, component by component. With two cells, a copy.
         template <class Field, std::size_t stencil_size>
         void extrapolate_cells(Field& field, const Cells<stencil_size>& cells)
@@ -893,12 +942,18 @@ namespace samurai
             }
         }
 
-        // The kernel that extrapolates the entries of a key into `field`.
+        // The kernel that extrapolates the entries of a key into `field`, and
+        // stops on a NaN in the cells it reads, under SAMURAI_CHECK_NAN.
         template <class Field>
         auto extrapolation_of(Field& field)
         {
             return [&field](const auto& cells)
             {
+                constexpr std::size_t stencil_size = std::tuple_size_v<std::remove_cvref_t<decltype(cells)>>;
+                for (std::size_t k = 0; k + 1 < stencil_size; ++k)
+                {
+                    stop_on_nan(field, cells[k], cells[stencil_size - 1], "polynomial extrapolation");
+                }
                 extrapolate_cells(field, cells);
             };
         }
