@@ -435,8 +435,8 @@ namespace samurai
         }
 
         // Emits the storage indices of the cells of `stencil` laid on each cell of `origins`, the ghost to fill last.
-        template <class Mesh, class Subset, std::size_t stencil_size, class Emit>
-        void emit_stencils(const Mesh& mesh, Subset& origins, const Stencil<stencil_size, Mesh::dim>& stencil, Emit& emit)
+        template <class Mesh, class Set, std::size_t stencil_size, class Emit>
+        void emit_stencils(const Mesh& mesh, Set& origins, const Stencil<stencil_size, Mesh::dim>& stencil, Emit& emit)
         {
             auto stencil_analyzer = make_stencil_analyzer(stencil);
             for_each_stencil(mesh,
@@ -455,11 +455,11 @@ namespace samurai
 
         // Emits the stencils laid on the cells of `level` in `bdry_cells`, for the ghost layer `layer`. Past
         // the first layer, the ghost a stencil ends on has to exist: it is not always the case for large stencils.
-        template <class Mesh, class Subset, std::size_t stencil_size, class Emit>
+        template <class Mesh, class Set, std::size_t stencil_size, class Emit>
         void emit_stencils_on_cells(const Mesh& mesh,
                                     std::size_t level,
                                     const DirectionVector<Mesh::dim>& direction,
-                                    Subset& bdry_cells,
+                                    Set& bdry_cells,
                                     const Stencil<stencil_size, Mesh::dim>& stencil,
                                     std::size_t layer,
                                     Emit& emit)
@@ -641,7 +641,7 @@ namespace samurai
                 emit_stencils(mesh, inner_ghosts_with_outer_nghbr, stencil, emit);
             }
 
-            // On a box domain that holds the cells and the union: the union cells on its face that are not cells.
+            // On a box domain that holds the cells and the union: the part of the union on its face that is not cells.
             template <class Mesh, class Emit>
             bool walk(const Mesh& mesh, Emit& emit) const
             {

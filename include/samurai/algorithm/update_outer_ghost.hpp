@@ -121,7 +121,7 @@ namespace samurai
                     });
             }
 
-            // Same entries by walking the union cells on the face of a box
+            // Same entries by walking the union on the face of a box
             // domain, moved `layer` cells out.
             template <class Mesh, class Emit>
             bool walk(const Mesh& mesh, Emit& emit) const

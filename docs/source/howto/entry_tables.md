@@ -7,7 +7,7 @@ The ghost update of {{ project }} fills its ghosts this way.
 ## Before you start
 
 - You have a mesh and a field. See the {doc}`mesh how-to <mesh>` and the {doc}`field how-to <field>`.
-- You know how to traverse a set expression with a function of an interval `i` and an index `index`. See the {doc}`subset reference <../reference/subset>`.
+- You know how to traverse a set expression with a function of an interval `i` and an index `index`. See the {doc}`set algebra reference <../reference/subset>`.
 - Your computation runs many times between two changes of the mesh. A table is recorded the first time it is asked for, and dropped when the mesh rebuilds its cells: it pays off when it is read more than once.
 - Your set expression depends on the mesh and on a few integers only (a level, a direction, a number of layers). What it depends on becomes the members of the key.
 
@@ -93,7 +93,8 @@ SAMURAI_ENTRY_TABLES=0 ./my_program
 
 The kernel and the results are the same; only the time changes.
 This is the way to compare both paths, or to save the memory of the tables.
-In a program, `samurai::entry_tables_enabled() = false;` does the same.
+In a program, `samurai::entry_tables_enabled() = false;` does the same for the calls that follow: the tables already recorded stay in their mesh until it rebuilds its cells.
+Set it before any thread calls `for_each_entry`.
 
 A mesh type that has no `entry_tables()` member also runs without tables.
 
@@ -108,5 +109,5 @@ Change the configuration of a mesh before the first call to `for_each_entry`.
 ## Next steps
 
 - {doc}`Loop over cells <loop>`: the loops to use when the computation runs once.
-- {doc}`Subset reference <../reference/subset>`: the set expressions a key can traverse.
+- {doc}`Set algebra reference <../reference/subset>`: the set expressions a key can traverse.
 - {doc}`Measure execution time <timers>`: find the computations worth a table.
